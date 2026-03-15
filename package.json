@@ -1,0 +1,24 @@
+{
+  "name": "modcart",
+  "private": true,
+  "description": "Multi-vendor eCommerce platform built with Node.js and TypeScript",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "test": "turbo run test",
+    "setup": "docker-compose up -d && pnpm install && pnpm --filter @modcart/db run generate && pnpm --filter @modcart/db db:push",
+    "start:all": "./start.sh"
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0",
+    "turbo": "latest",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.4"
+}

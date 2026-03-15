@@ -1,0 +1,33 @@
+:root {
+  --background: #0f172a;
+  --foreground: #f8fafc;
+  --primary: #8b5cf6;
+  --card-bg: rgba(30, 41, 59, 0.7);
+  --border: rgba(255, 255, 255, 0.1);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+}
+
+input, select, textarea {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: white;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  outline: none;
+}
+
+input:focus {
+  border-color: var(--primary);
+}
