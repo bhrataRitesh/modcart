@@ -4,7 +4,7 @@ import { cartItemSchema } from '@modcart/core';
 
 export default async function cartRoutes(fastify: FastifyInstance) {
   // Get current cart
-  fastify.get('/', async (request, reply) => {
+  fastify.get('/', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
     // For now, only authenticated users have a cart for simplicity
     const user = request.user as { id: string } | undefined;
     if (!user) {
@@ -77,5 +77,22 @@ export default async function cartRoutes(fastify: FastifyInstance) {
       where: { id },
     });
     return { success: true };
+  });
+
+  // Update item quantity
+  fastify.put('/items/:id', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { quantity } = request.body as { quantity: number };
+    
+    if (quantity <= 0) {
+      await prisma.cartItem.delete({ where: { id } });
+      return { success: true, removed: true };
+    }
+
+    const updated = await prisma.cartItem.update({
+      where: { id },
+      data: { quantity },
+    });
+    return updated;
   });
 }

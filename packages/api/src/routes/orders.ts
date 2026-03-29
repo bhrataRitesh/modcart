@@ -97,7 +97,14 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const user = request.user as { id: string };
     return prisma.order.findMany({
       where: { userId: user.id },
-      include: { items: true },
+      include: { 
+        items: {
+          include: { product: { select: { name: true } } }
+        },
+        vendorOrders: {
+          include: { vendor: { select: { storeName: true } } }
+        }
+      },
       orderBy: { createdAt: 'desc' },
     });
   });

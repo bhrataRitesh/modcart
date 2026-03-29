@@ -64,10 +64,86 @@ export default async function authRoutes(fastify: FastifyInstance) {
       role: user.role,
     });
 
-    return { token };
+    return { 
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role
+      }
+    };
   });
 
-  fastify.get('/me', { preHandler: [(fastify as any).authenticate] }, async (request) => {
-    return request.user;
+  // Get full user profile
+  fastify.get('/me', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+    const userJwt = request.user as { id: string };
+    const user = await prisma.user.findUnique({
+      where: { id: userJwt.id },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        role: true,
+        status: true,
+        createdAt: true,
+        addresses: true,
+      }
+    });
+
+    if (!user) return reply.code(404).send({ message: 'User not found' });
+    return user;
   });
+
+  // Update user profile
+  fastify.put('/me', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+    const userJwt = request.user as { id: string };
+    const body = request.body as any; 
+
+    const user = await prisma.user.update({
+      where: { id: userJwt.id },
+      data: {
+        firstName: body.firstName,
+        lastName: body.lastName,
+        phone: body.phone,
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+      }
+    });
+    return user;
+  });
+
+  // Add address
+  fastify.post('/me/addresses', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+    const userJwt = request.user as { id: string };
+    const body = request.body as any;
+
+    const address = await prisma.address.create({
+      data: {
+        userId: userJwt.id,
+        label: body.label,
+        firstName: body.firstName,
+        lastName: body.lastName,
+        line1: body.line1,
+        line2: body.line2,
+        city: body.city,
+        state: body.state,
+        postalCode: body.postalCode,
+        country: body.country,
+        isDefault: body.isDefault || false,
+      }
+    });
+
+    return address;
+  });
+
+
 }

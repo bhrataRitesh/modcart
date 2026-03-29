@@ -15,6 +15,7 @@ export interface SearchProduct {
   vendorName: string;
   categories: string[];
   imageUrl?: string | null;
+  isVerified?: boolean;
 }
 
 export interface SearchFilter {
@@ -39,6 +40,7 @@ export const initIndex = async () => {
             vendorName: { type: 'text' },
             categories: { type: 'keyword' },
             imageUrl: { type: 'keyword' },
+            isVerified: { type: 'boolean' },
           },
         },
       },

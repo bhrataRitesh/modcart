@@ -2,16 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
 
 export default async function vendorRoutes(fastify: FastifyInstance) {
-  // Get vendor statistics
-  fastify.get('/stats', async (request, reply) => {
+  fastify.get('/stats', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
     try {
-      // In a real app, this would be the authenticated vendor ID
-      // For now, we'll try to get it from the request or use a default seed vendor
-      const user = request.user as any;
+      const user = request.user as { id: string };
       
-      // Find the vendor profile for this user
-      const vendor = await prisma.vendorProfile.findFirst({
-        where: user ? { userId: user.id } : {}
+      const vendor = await prisma.vendorProfile.findUnique({
+        where: { userId: user.id }
       });
 
       if (!vendor) {
@@ -19,12 +15,17 @@ export default async function vendorRoutes(fastify: FastifyInstance) {
       }
 
       // Aggregate statistics
-      const [productCount, orderCount, totalSales] = await Promise.all([
+      const [productCount, orderCount, totalSales, reviewStats] = await Promise.all([
         prisma.product.count({ where: { vendorId: vendor.id } }),
         prisma.vendorOrder.count({ where: { vendorId: vendor.id } }),
         prisma.vendorOrder.aggregate({
           where: { vendorId: vendor.id },
           _sum: { vendorEarnings: true }
+        }),
+        prisma.review.aggregate({
+          where: { product: { vendorId: vendor.id } },
+          _avg: { rating: true },
+          _count: { _all: true }
         })
       ]);
 
@@ -45,7 +46,10 @@ export default async function vendorRoutes(fastify: FastifyInstance) {
           totalEarnings: totalSales._sum.vendorEarnings || 0,
           activeProducts: await prisma.product.count({ 
             where: { vendorId: vendor.id, status: 'ACTIVE' } 
-          })
+          }),
+          trustScore: reviewStats._avg.rating || 0,
+          totalReviews: reviewStats._count._all || 0,
+          isVerified: (reviewStats._avg.rating || 0) >= 4.5 && (reviewStats._count._all || 0) >= 5
         },
         recentOrders
       };
@@ -56,7 +60,7 @@ export default async function vendorRoutes(fastify: FastifyInstance) {
   });
 
   // Image upload
-  fastify.post('/upload', async (request, reply) => {
+  fastify.post('/upload', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
     try {
       const data = await request.file();
       if (!data) {

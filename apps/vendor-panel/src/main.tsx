@@ -1,15 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 
 const VendorPanel = () => {
+  const [token, setToken] = useState<string | null>(localStorage.getItem('vendor_token'));
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token');
+    if (urlToken) {
+      localStorage.setItem('vendor_token', urlToken);
+      setToken(urlToken);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
-  const [view, setView] = useState<'dashboard' | 'inventory' | 'payouts'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'inventory' | 'orders' | 'messages' | 'payouts'>('dashboard');
   const [payouts, setPayouts] = useState<any[]>([]);
   const [payoutStats, setPayoutStats] = useState<any>(null);
+  
+  // Chat States
+  const [contacts, setContacts] = useState<any[]>([]);
+  const [activeContact, setActiveContact] = useState<any>(null);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const ws = useRef<WebSocket | null>(null);
+
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -20,338 +43,288 @@ const VendorPanel = () => {
   });
   const [isUploading, setIsUploading] = useState(false);
 
-  useEffect(() => {
-    fetch('http://localhost:3001/api/v1/products')
-      .then(res => res.json())
-      .then(data => setProducts(data));
-      
-    fetch('http://localhost:3001/api/v1/categories')
-      .then(res => res.json())
-      .then(data => setCategories(data));
-
-    fetch('http://localhost:3001/api/v1/vendor/stats')
-      .then(res => res.json())
-      .then(data => {
+  const fetchData = async () => {
+    if (!token) return;
+    try {
+      const statsRes = await fetch('http://localhost:3001/api/v1/vendor/stats', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (statsRes.ok) {
+        const data = await statsRes.json();
         setStats(data.stats);
         setRecentOrders(data.recentOrders);
-      });
-      
-    fetch('http://localhost:3001/api/v1/payouts')
-      .then(res => res.json())
-      .then(data => setPayouts(data));
+      } else { logout(); }
 
-    fetch('http://localhost:3001/api/v1/payouts/stats')
-      .then(res => res.json())
-      .then(data => setPayoutStats(data));
-  }, []);
+      fetch('http://localhost:3001/api/v1/products').then(r => r.json()).then(d => setProducts(Array.isArray(d) ? d : []));
+      fetch('http://localhost:3001/api/v1/categories').then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []));
+      fetch('http://localhost:3001/api/v1/payouts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayouts(d));
+      fetch('http://localhost:3001/api/v1/payouts/stats', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayoutStats(d));
+      fetch('http://localhost:3001/api/v1/chat/vendor/contacts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
+    } catch (e) { console.error(e); }
+  };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  useEffect(() => {
+    fetchData();
+  }, [token]);
 
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
+  useEffect(() => {
+    if (token && stats) {
+      const socket = new WebSocket(`ws://localhost:3001/api/v1/chat/ws/me?token=${token}`);
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          setChatMessages(prev => {
+            if (activeContact && (msg.senderId === activeContact.id || (msg.isFromVendor && msg.senderId === activeContact.id))) {
+              return [...prev, msg];
+            }
+            return prev;
+          });
+          fetch('http://localhost:3001/api/v1/chat/vendor/contacts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
+        } catch (e) {}
+      };
+      ws.current = socket;
+      return () => socket.close();
+    }
+  }, [token, stats, activeContact]);
 
+  useEffect(() => {
+    if (activeContact && token) {
+      fetch(`http://localhost:3001/api/v1/chat/vendor/history/${activeContact.id}`, { headers: { 'Authorization': `Bearer ${token}` } })
+      .then(res => res.json()).then(data => setChatMessages(Array.isArray(data) ? data : []));
+    }
+  }, [activeContact, token]);
+
+  const sendChatMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !ws.current || !activeContact) return;
+    ws.current.send(JSON.stringify({ content: chatInput, customerId: activeContact.id }));
+    setChatInput('');
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      const res = await fetch('http://localhost:3001/api/v1/vendor/upload', {
+      const res = await fetch('http://localhost:3001/api/v1/auth/login', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
       });
       const data = await res.json();
       if (res.ok) {
-        setForm({ ...form, imageUrl: data.url });
-      }
-    } catch (error) {
-      console.error('Upload failed', error);
-    } finally {
-      setIsUploading(false);
-    }
+        if (data.user.role !== 'VENDOR') { alert('Access Denied: Not a vendor'); return; }
+        localStorage.setItem('vendor_token', data.token);
+        setToken(data.token);
+      } else { alert(data.message || 'Login failed'); }
+    } catch { alert('Network error'); }
+  };
+
+  const logout = () => { localStorage.removeItem('vendor_token'); setToken(null); };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !token) return;
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('http://localhost:3001/api/v1/vendor/upload', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) setForm({ ...form, imageUrl: data.url });
+    } finally { setIsUploading(false); }
   };
 
   const addProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = await fetch('http://localhost:3001/api/v1/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...form,
-        categoryIds: [form.categoryId],
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ ...form, categoryIds: [form.categoryId] }),
     });
     if (res.ok) {
-      const newProd = await res.json();
-      setProducts([...products, newProd]);
       setForm({ name: '', description: '', price: 0, stockQty: 0, categoryId: '', imageUrl: '' });
+      fetchData();
     }
+  };
+
+  const deleteProduct = async (id: string) => {
+    if(!confirm('Delete this product?')) return;
+    const res = await fetch(`http://localhost:3001/api/v1/products/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    if(res.ok) fetchData();
   };
 
   const handlePayoutRequest = async () => {
-    const res = await fetch('http://localhost:3001/api/v1/payouts/request', {
-      method: 'POST',
-    });
-    const data = await res.json();
-    if (res.ok) {
-      alert('Payout request submitted!');
-      setPayouts([data, ...payouts]);
-      // Refresh stats
-      fetch('http://localhost:3001/api/v1/payouts/stats')
-        .then(res => res.json())
-        .then(stats => setPayoutStats(stats));
-    } else {
-      alert(data.message || 'Payout request failed');
-    }
+    const res = await fetch('http://localhost:3001/api/v1/payouts/request', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+    if (res.ok) { alert('Payout requested!'); fetchData(); }
   };
 
-  return (
-    <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
-      <nav style={{ display: 'flex', gap: '2rem', marginBottom: '2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
-        <button 
-          onClick={() => setView('dashboard')}
-          style={{ background: 'none', border: 'none', color: view === 'dashboard' ? '#8b5cf6' : '#94a3b8', fontWeight: '600', cursor: 'pointer', fontSize: '1rem' }}
-        >
-          Dashboard
-        </button>
-        <button 
-          onClick={() => setView('inventory')}
-          style={{ background: 'none', border: 'none', color: view === 'inventory' ? '#8b5cf6' : '#94a3b8', fontWeight: '600', cursor: 'pointer', fontSize: '1rem' }}
-        >
-          Inventory
-        </button>
-        <button 
-          onClick={() => setView('payouts')}
-          style={{ background: 'none', border: 'none', color: view === 'payouts' ? '#8b5cf6' : '#94a3b8', fontWeight: '600', cursor: 'pointer', fontSize: '1rem' }}
-        >
-          Payouts
-        </button>
-      </nav>
-
-      <header style={{ marginBottom: '3rem' }}>
-        <h1 style={{ fontSize: '2.5rem', fontWeight: 'bold', margin: 0 }}>Vendor <span style={{ color: '#8b5cf6' }}>Console</span></h1>
-        <p style={{ color: '#94a3b8', marginTop: '0.5rem' }}>{view === 'dashboard' ? 'Performance Overview' : 'Advanced Inventory & Store Management'}</p>
-      </header>
-
-      {view === 'dashboard' ? (
-        <div style={{ display: 'grid', gap: '2rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem' }}>
-            <div className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem' }}>
-              <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>Total Earnings</p>
-              <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>${stats?.totalEarnings || 0}</h3>
-            </div>
-            <div className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem' }}>
-              <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>Total Orders</p>
-              <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>{stats?.totalOrders || 0}</h3>
-            </div>
-            <div className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem' }}>
-              <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>Active Products</p>
-              <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>{stats?.activeProducts || 0}</h3>
-            </div>
+  if (!token) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#0a0f1c' }}>
+        <form onSubmit={handleLogin} className="glass" style={{ padding: '3rem', borderRadius: '1.5rem', width: '400px', display: 'flex', flexDirection: 'column', gap: '1.5rem', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ textAlign: 'center' }}>
+            <h2 style={{ fontSize: '2rem', margin: 0, fontWeight: 'bold' }}>modcart <span style={{ color: '#8b5cf6' }}>Vendor</span></h2>
+            <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginTop: '0.5rem' }}>Login to your storefront</p>
           </div>
+          <input placeholder="Email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required />
+          <input placeholder="Password" type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required />
+          <button type="submit" style={{ background: '#8b5cf6', color: 'white', border: 'none', padding: '1rem', borderRadius: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}>Authenticate</button>
+        </form>
+      </div>
+    );
+  }
 
-          <section className="glass" style={{ padding: '2rem', borderRadius: '1.5rem' }}>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: '600' }}>Recent Orders</h2>
-            {recentOrders.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '0.85rem' }}>
-                    <th style={{ padding: '1rem' }}>Order ID</th>
-                    <th style={{ padding: '1rem' }}>Date</th>
-                    <th style={{ padding: '1rem' }}>Earnings</th>
-                    <th style={{ padding: '1rem' }}>Status</th>
-                  </tr>
-                </thead>
+  const SidebarItem = ({ id, label, icon }: { id: any, label: string, icon: string }) => (
+    <div 
+      onClick={() => setView(id)}
+      style={{ 
+        padding: '0.75rem 1.25rem', 
+        cursor: 'pointer', borderRadius: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem',
+        background: view === id ? 'rgba(139,92,246,0.1)' : 'transparent',
+        color: view === id ? '#8b5cf6' : '#94a3b8', fontWeight: '600', transition: 'all 0.2s'
+      }}
+    >
+      <span style={{ fontSize: '1.2rem' }}>{icon}</span>
+      {label}
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0a0f1c', color: 'white' }}>
+      <aside style={{ width: '260px', borderRight: '1px solid rgba(255,255,255,0.05)', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <div><h1 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>modcart <span style={{ color: '#8b5cf6' }}>Seller</span></h1></div>
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <SidebarItem id="dashboard" label="Dashboard" icon="📈" />
+          <SidebarItem id="inventory" label="Inventory" icon="📦" />
+          <SidebarItem id="orders" label="Orders" icon="📑" />
+          <SidebarItem id="messages" label="Messages" icon="💬" />
+          <SidebarItem id="payouts" label="Payouts" icon="💰" />
+        </nav>
+        <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '1rem' }}>
+          <p style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>Logged in as Store</p>
+          <p style={{ fontSize: '0.9rem', fontWeight: '600', textOverflow: 'ellipsis', overflow: 'hidden' }}>{authEmail}</p>
+          <button onClick={logout} style={{ width: '100%', marginTop: '1rem', padding: '0.5rem', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>Sign Out</button>
+        </div>
+      </aside>
+
+      <main style={{ flex: 1, padding: '2.5rem', overflowY: 'auto' }}>
+        <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', textTransform: 'capitalize', marginBottom: '2.5rem' }}>{view}</h2>
+
+        {view === 'dashboard' && stats && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', animation: 'fadeIn 0.3s' }}>
+            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Total Earnings</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>${stats.totalEarnings.toLocaleString()}</h3></div>
+            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Store Orders</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.totalOrders}</h3></div>
+            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Active Listings</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.activeProducts}</h3></div>
+            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Trust Score</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.trustScore.toFixed(1)}</h3></div>
+          </div>
+        )}
+
+        {view === 'inventory' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', animation: 'fadeIn 0.3s' }}>
+            <section className="glass" style={{ padding: '2rem', height: 'fit-content' }}>
+              <h3 style={{ marginBottom: '1.5rem', fontWeight: 'bold' }}>New Listing</h3>
+              <form onSubmit={addProduct} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <input placeholder="Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
+                <textarea placeholder="Description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} style={{ minHeight: '100px' }} />
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <input type="number" placeholder="Price" value={form.price} onChange={e => setForm({...form, price: Number(e.target.value)})} required />
+                  <input type="number" placeholder="Stock" value={form.stockQty} onChange={e => setForm({...form, stockQty: Number(e.target.value)})} required />
+                </div>
+                <select value={form.categoryId} onChange={e => setForm({...form, categoryId: e.target.value})} required>
+                  <option value="">Category</option>
+                  {categories?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <div className="upload-box" style={{ padding: '1rem', border: '1px dashed rgba(255,255,255,0.1)', textAlign: 'center', borderRadius: '0.75rem', position: 'relative' }}>
+                  {form.imageUrl ? <img src={form.imageUrl} style={{ height: '60px', borderRadius: '0.4rem' }} /> : (isUploading ? 'Uploading...' : 'Click to Upload Image')}
+                  <input type="file" onChange={handleImageUpload} style={{ opacity: 0, position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: 'pointer' }} />
+                </div>
+                <button type="submit" className="btn btn-purple">Add Product</button>
+              </form>
+            </section>
+            <div className="glass overflow-hidden">
+               <table className="admin-table">
+                <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead>
                 <tbody>
-                  {recentOrders.map(order => (
-                    <tr key={order.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                      <td style={{ padding: '1rem' }}>#{order.orderId.slice(0, 8)}</td>
-                      <td style={{ padding: '1rem' }}>{new Date(order.order.createdAt).toLocaleDateString()}</td>
-                      <td style={{ padding: '1rem' }}>${order.vendorEarnings}</td>
-                      <td style={{ padding: '1rem' }}>
-                        <span style={{ 
-                          padding: '0.25rem 0.5rem', 
-                          borderRadius: '0.5rem', 
-                          fontSize: '0.75rem', 
-                          background: 'rgba(59,130,246,0.1)', 
-                          color: '#60a5fa' 
-                        }}>
-                          {order.status}
-                        </span>
-                      </td>
-                    </tr>
+                  {products?.map(p => (
+                    <tr key={p.id}><td><b>{p.name}</b></td><td>${p.price}</td><td>{p.stockQty}</td><td><button onClick={() => deleteProduct(p.id)} className="btn-small btn-red">Delete</button></td></tr>
                   ))}
                 </tbody>
               </table>
-            ) : (
-              <p style={{ color: '#64748b', textAlign: 'center', padding: '2rem' }}>No orders found yet.</p>
-            )}
-          </section>
-        </div>
-      ) : view === 'inventory' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(350px, 1fr) 2fr', gap: '2rem' }}>
-          {/* Inventory content (the existing one) */}
-          <section className="glass" style={{ padding: '2rem', borderRadius: '1.5rem', alignSelf: 'start' }}>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: '600' }}>New Listing</h2>
-            <form onSubmit={addProduct} style={{ display: 'grid', gap: '1.25rem' }}>
-              <input placeholder="Product Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
-              <textarea placeholder="Product Description" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} style={{ minHeight: '120px' }} />
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.75rem', color: '#64748b', marginLeft: '0.5rem' }}>Product Image</label>
-                <div style={{ 
-                  border: '2px dashed rgba(255,255,255,0.1)', 
-                  borderRadius: '0.75rem', 
-                  padding: '1rem', 
-                  textAlign: 'center',
-                  position: 'relative'
-                }}>
-                  {form.imageUrl ? (
-                    <img src={form.imageUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '150px', borderRadius: '0.5rem' }} />
-                  ) : (
-                    <div style={{ color: '#64748b' }}>{isUploading ? 'Uploading...' : 'Click to Upload'}</div>
-                  )}
-                  <input 
-                    type="file" 
-                    onChange={handleImageUpload} 
-                    style={{ 
-                      position: 'absolute', 
-                      top: 0, left: 0, width: '100%', height: '100%', 
-                      opacity: 0, cursor: 'pointer' 
-                    }} 
-                    disabled={isUploading}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <label style={{ fontSize: '0.75rem', color: '#64748b', marginLeft: '0.5rem' }}>Price ($)</label>
-                  <input type="number" value={form.price} onChange={e => setForm({ ...form, price: Number(e.target.value) })} required />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <label style={{ fontSize: '0.75rem', color: '#64748b', marginLeft: '0.5rem' }}>Stock Qty</label>
-                  <input type="number" value={form.stockQty} onChange={e => setForm({ ...form, stockQty: Number(e.target.value) })} required />
-                </div>
-              </div>
-              <select value={form.categoryId} onChange={e => setForm({ ...form, categoryId: e.target.value })} required>
-                <option value="">Select Category</option>
-                {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-              </select>
-              <button type="submit" style={{ 
-                background: '#8b5cf6', 
-                color: 'white', 
-                border: 'none', 
-                padding: '1rem', 
-                borderRadius: '0.75rem',
-                fontWeight: '600',
-                marginTop: '0.5rem'
-              }}>Publish Item</button>
-            </form>
-          </section>
-
-          <section>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.25rem', margin: 0, fontWeight: '600' }}>Live Inventory</h2>
-              <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{products.length} Products</span>
             </div>
-            <div style={{ grid: '1fr', gap: '1rem' }}>
-              {products.map(prod => (
-                <div key={prod.id} className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <div>
-                    <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem' }}>{prod.name}</h3>
-                    <div style={{ display: 'flex', gap: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>Price: <b style={{ color: 'white' }}>${prod.price}</b></span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>Stock: <b style={{ color: 'white' }}>{prod.stockQty}</b></span>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <span style={{ 
-                      padding: '0.35rem 0.85rem', 
-                      borderRadius: '2rem', 
-                      fontSize: '0.7rem', 
-                      fontWeight: '700',
-                      background: prod.status === 'ACTIVE' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                      color: prod.status === 'ACTIVE' ? '#4ade80' : '#f87171',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em'
-                    }}>
-                      {prod.status}
-                    </span>
-                  </div>
+          </div>
+        )}
+
+        {view === 'orders' && (
+          <div className="glass overflow-hidden" style={{ animation: 'fadeIn 0.3s' }}>
+             <table className="admin-table">
+              <thead><tr><th>Order ID</th><th>Customer</th><th>Earnings</th><th>Status</th></tr></thead>
+              <tbody>
+                {recentOrders?.map(o => (
+                  <tr key={o.id}>
+                    <td><span className="mono">#{o?.orderId?.slice(-6).toUpperCase() || '---'}</span></td>
+                    <td>{o?.order?.user?.email || 'N/A'}</td>
+                    <td className="text-green">${o?.vendorEarnings?.toFixed(2)}</td>
+                    <td><span className={`badge badge-${o?.status === 'SHIPPED' ? 'green' : 'yellow'}`}>{o?.status}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {view === 'messages' && (
+          <section className="glass overflow-hidden" style={{ height: '600px', display: 'flex', animation: 'fadeIn 0.3s' }}>
+            <div style={{ width: '250px', borderRight: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.1)' }}>
+              {contacts?.map(c => (
+                <div key={c.id} onClick={() => setActiveContact(c)} style={{ padding: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer', background: activeContact?.id === c.id ? 'rgba(139,92,246,0.1)' : 'transparent', color: activeContact?.id === c.id ? '#8b5cf6' : 'inherit' }}>
+                   <b>{c.firstName} {c.lastName}</b>
                 </div>
               ))}
             </div>
-          </section>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', flex: 1 }}>
-              <div className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem' }}>
-                <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>Pending Balance</p>
-                <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>${payoutStats?.pending || 0}</h3>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {chatMessages?.map((m, i) => (
+                  <div key={i} style={{ alignSelf: m.isFromVendor ? 'flex-end' : 'flex-start', background: m.isFromVendor ? '#8b5cf6' : 'rgba(255,255,255,0.05)', padding: '0.6rem 1rem', borderRadius: '0.8rem', maxWidth: '75%' }}>{m.content}</div>
+                ))}
               </div>
-              <div className="glass" style={{ padding: '1.5rem', borderRadius: '1.5rem' }}>
-                <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>Processed Payouts</p>
-                <h3 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>${payoutStats?.processed || 0}</h3>
+              <form onSubmit={sendChatMessage} style={{ padding: '1.5rem', display: 'flex', gap: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                <input placeholder="Type here..." value={chatInput} onChange={e => setChatInput(e.target.value)} style={{ flex: 1, background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: '0.75rem', padding: '0.8rem 1.2rem', color: 'white' }} />
+                <button type="submit" className="btn btn-purple">Send</button>
+              </form>
+            </div>
+          </section>
+        )}
+
+        {view === 'payouts' && (
+          <div style={{ display: 'grid', gap: '2rem', animation: 'fadeIn 0.3s' }}>
+            <div style={{ display: 'flex', gap: '1.5rem' }}>
+              <div className="glass" style={{ padding: '1.5rem', flex: 1 }}>
+                <p className="text-muted">Unpaid Balance</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>${payoutStats?.pending || 0}</h3>
+                <button onClick={handlePayoutRequest} className="btn btn-purple" style={{ width: '100%', marginTop: '1rem' }}>Request Withdrawal</button>
+              </div>
+              <div className="glass" style={{ padding: '1.5rem', flex: 1 }}>
+                <p className="text-muted">Already Paid</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>${payoutStats?.processed || 0}</h3>
               </div>
             </div>
-            <button 
-              onClick={handlePayoutRequest}
-              disabled={!payoutStats?.pending}
-              style={{ 
-                background: payoutStats?.pending ? '#8b5cf6' : '#1e1b4b', 
-                color: 'white', 
-                border: 'none', 
-                padding: '1rem 2rem', 
-                borderRadius: '1rem',
-                fontWeight: '600',
-                cursor: payoutStats?.pending ? 'pointer' : 'not-allowed',
-                marginLeft: '2rem'
-              }}
-            >
-              Request Payout
-            </button>
+            <div className="glass overflow-hidden"><table className="admin-table"><thead><tr><th>Date</th><th>Amount</th><th>Status</th></tr></thead><tbody>{payouts?.map(p => (<tr key={p.id}><td>{new Date(p.createdAt).toLocaleDateString()}</td><td className="text-green">${p.amount}</td><td>{p.status}</td></tr>))}</tbody></table></div>
           </div>
+        )}
+      </main>
 
-          <section className="glass" style={{ padding: '2rem', borderRadius: '1.5rem' }}>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: '600' }}>Payout History</h2>
-            {payouts.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '0.85rem' }}>
-                    <th style={{ padding: '1rem' }}>Payout ID</th>
-                    <th style={{ padding: '1rem' }}>Date</th>
-                    <th style={{ padding: '1rem' }}>Amount</th>
-                    <th style={{ padding: '1rem' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payouts.map(payout => (
-                    <tr key={payout.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                      <td style={{ padding: '1rem' }}>#{payout.id.slice(0, 8)}</td>
-                      <td style={{ padding: '1rem' }}>{new Date(payout.createdAt).toLocaleDateString()}</td>
-                      <td style={{ padding: '1rem' }}>${payout.amount}</td>
-                      <td style={{ padding: '1rem' }}>
-                        <span style={{ 
-                          padding: '0.25rem 0.5rem', 
-                          borderRadius: '0.5rem', 
-                          fontSize: '0.75rem', 
-                          background: payout.status === 'COMPLETED' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', 
-                          color: payout.status === 'COMPLETED' ? '#4ade80' : '#fbbf24' 
-                        }}>
-                          {payout.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p style={{ color: '#64748b', textAlign: 'center', padding: '2rem' }}>No payout history found.</p>
-            )}
-          </section>
-        </div>
-      )}
+      <style>{`
+        .admin-table { width: 100%; border-collapse: collapse; }
+        .admin-table th { text-align: left; padding: 1rem; color: #64748b; font-size: 0.8rem; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .admin-table td { padding: 1.25rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 0.9rem; }
+        .mono { font-family: monospace; }
+        .text-muted { color: #64748b; font-size: 0.85rem; }
+        .text-green { color: #10b981; }
+        .badge { padding: 0.25rem 0.6rem; border-radius: 2rem; font-size: 0.7rem; font-weight: bold; }
+        .badge-green { background: rgba(16,185,129,0.1); color: #10b981; }
+        .badge-yellow { background: rgba(245,158,11,0.1); color: #f59e0b; }
+        .btn { padding: 0.75rem 1.5rem; border-radius: 0.75rem; border: none; font-weight: bold; cursor: pointer; }
+        .btn-purple { background: #8b5cf6; color: white; }
+        .btn-small { padding: 0.4rem 0.8rem; border-radius: 0.5rem; border: none; cursor: pointer; font-size: 0.8rem; }
+        .btn-red { background: rgba(239,68,68,0.1); color: #ef4444; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
     </div>
   );
 };
