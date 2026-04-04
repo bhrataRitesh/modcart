@@ -1,3 +1,4 @@
+import { env } from '@modcart/config';
 import fp from 'fastify-plugin';
 import multipart from '@fastify/multipart';
 import { StorageClient } from '@modcart/core';
@@ -12,11 +13,11 @@ export default fp(async (fastify) => {
 
   // Initialize storage client
   const storage = new StorageClient({
-    endPoint: process.env.MINIO_ENDPOINT || 'localhost',
-    port: parseInt(process.env.MINIO_PORT || '9000'),
-    useSSL: process.env.MINIO_USE_SSL === 'true',
-    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+    endPoint: env.MINIO_ENDPOINT,
+    port: env.MINIO_PORT,
+    useSSL: env.MINIO_USE_SSL,
+    accessKey: env.MINIO_ACCESS_KEY,
+    secretKey: env.MINIO_SECRET_KEY,
   });
 
   // Decorate fastify instance

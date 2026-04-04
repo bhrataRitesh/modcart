@@ -1,12 +1,13 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
 import { cartItemSchema } from '@modcart/core';
+import { UserPayload } from '../types';
 
 export default async function cartRoutes(fastify: FastifyInstance) {
   // Get current cart
-  fastify.get('/', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+  fastify.get('/', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     // For now, only authenticated users have a cart for simplicity
-    const user = request.user as { id: string } | undefined;
+    const user = request.user as UserPayload | undefined;
     if (!user) {
       return reply.code(401).send({ message: 'Login required for cart' });
     }
@@ -31,8 +32,8 @@ export default async function cartRoutes(fastify: FastifyInstance) {
   });
 
   // Add item to cart
-  fastify.post('/items', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const user = request.user as { id: string };
+  fastify.post('/items', { preHandler: [fastify.authenticate] }, async (request) => {
+    const user = request.user as UserPayload;
     const body = cartItemSchema.parse(request.body);
 
     let cart = await prisma.cart.findUnique({
@@ -71,7 +72,7 @@ export default async function cartRoutes(fastify: FastifyInstance) {
   });
 
   // Remove item from cart
-  fastify.delete('/items/:id', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+  fastify.delete('/items/:id', { preHandler: [fastify.authenticate] }, async (request) => {
     const { id } = request.params as { id: string };
     await prisma.cartItem.delete({
       where: { id },
@@ -80,7 +81,7 @@ export default async function cartRoutes(fastify: FastifyInstance) {
   });
 
   // Update item quantity
-  fastify.put('/items/:id', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
+  fastify.put('/items/:id', { preHandler: [fastify.authenticate] }, async (request) => {
     const { id } = request.params as { id: string };
     const { quantity } = request.body as { quantity: number };
     

@@ -1,20 +1,32 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
-import { productSchema, generateSlug } from '@modcart/core';
+import { generateSlug } from '@modcart/core';
+import { validate } from '../middleware/validate';
+import { sendNotification } from '../services/notification.service';
+import { createProductSchema, updateProductSchema } from '../schemas/product.schema';
+import { requireRole, requireOwnership } from '../middleware/rbac';
+import { UserPayload } from '../types';
+import { z } from 'zod';
+
+type CreateProductBody = z.infer<typeof createProductSchema>;
+type UpdateProductBody = z.infer<typeof updateProductSchema>;
 
 export default async function productRoutes(fastify: FastifyInstance) {
   // List all active products
-  fastify.get('/', async (request) => {
+  fastify.get('/', async () => {
     return prisma.product.findMany({
       where: { status: 'ACTIVE' },
-      include: { vendor: true },
+      include: { 
+        vendor: true, 
+        images: { take: 1 } 
+      },
     });
   });
 
   // Create product (Vendor only)
-  fastify.post('/', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const body = productSchema.parse(request.body);
-    const user = request.user as { id: string };
+  fastify.post('/', { preHandler: [fastify.authenticate, requireRole(['VENDOR']), validate(createProductSchema)] }, async (request, reply) => {
+    const body = request.body as CreateProductBody;
+    const user = request.user as UserPayload;
 
     const vendor = await prisma.vendorProfile.findUnique({
       where: { userId: user.id },
@@ -24,7 +36,7 @@ export default async function productRoutes(fastify: FastifyInstance) {
       return reply.code(403).send({ message: 'Only vendors can create products' });
     }
 
-    const slug = generateSlug(body.name);
+    const slug = body.slug || generateSlug(body.name);
 
     const product = await prisma.product.create({
       data: {
@@ -34,15 +46,42 @@ export default async function productRoutes(fastify: FastifyInstance) {
         price: body.price,
         stockQty: body.stockQty,
         vendorId: vendor.id,
-        status: 'ACTIVE',
-        categories: {
-          create: body.categoryIds.map((id) => ({
+        status: body.status || 'ACTIVE',
+        categories: body.categoryIds ? {
+          create: body.categoryIds.map((id: string) => ({
             categoryId: id,
           })),
-        },
+        } : undefined,
+        images: body.images ? {
+          create: body.images.map(img => ({ url: img.url, alt: img.alt, sortOrder: img.sortOrder }))
+        } : undefined,
+        options: body.options ? {
+          create: body.options.map(opt => ({
+            name: opt.name,
+            type: opt.type,
+            required: opt.required,
+            values: {
+              create: opt.values.map(val => ({
+                name: val.name,
+                priceMod: val.priceMod
+              }))
+            }
+          }))
+        } : undefined,
+        variants: body.variants ? {
+          create: body.variants.map(v => ({
+            sku: v.sku,
+            price: v.price,
+            stockQty: v.stockQty,
+            imageId: v.imageId
+          }))
+        } : undefined
       },
       include: {
         categories: { include: { category: true } },
+        images: true,
+        options: { include: { values: true } },
+        variants: true
       },
     });
 
@@ -51,12 +90,14 @@ export default async function productRoutes(fastify: FastifyInstance) {
       indexProduct({
         id: product.id,
         name: product.name,
-        description: product.description,
-        price: product.price,
+        description: product.description || '',
+        price: Number(product.price),
         vendorId: product.vendorId,
         vendorName: vendor.storeName,
         categories: product.categories.map((c: any) => c.category.name),
-        imageUrl: product.imageUrl,
+        imageUrl: product.images[0]?.url || '',
+        imageUrls: product.images.map(img => img.url),
+        isVerified: true
       }).catch((err: Error) => fastify.log.error(err, 'Indexing failed'));
     });
 
@@ -68,7 +109,7 @@ export default async function productRoutes(fastify: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const product = await prisma.product.findUnique({
       where: { slug },
-      include: { vendor: true, categories: { include: { category: true } } },
+      include: { vendor: true, categories: { include: { category: true } }, images: true },
     });
 
     if (!product) {
@@ -76,5 +117,85 @@ export default async function productRoutes(fastify: FastifyInstance) {
     }
 
     return product;
+  });
+
+  // Update product (Vendor only)
+  fastify.put('/:id', { preHandler: [fastify.authenticate, requireRole(['VENDOR']), requireOwnership('product'), validate(updateProductSchema)] }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as UpdateProductBody;
+    const user = request.user as UserPayload;
+
+    const oldProduct = await prisma.product.findUnique({ where: { id }, select: { price: true, name: true } });
+
+    const updated = await prisma.product.update({
+      where: { id },
+      data: {
+        name: body.name,
+        description: body.description,
+        price: body.price,
+        stockQty: body.stockQty,
+        images: body.images ? {
+          deleteMany: {},
+          create: body.images.map(img => ({ url: img.url, alt: img.alt, sortOrder: img.sortOrder }))
+        } : undefined,
+        categories: body.categoryIds ? {
+          deleteMany: {},
+          create: body.categoryIds.map((cid: string) => ({ categoryId: cid }))
+        } : undefined
+      },
+      include: { images: true }
+    });
+
+    // Price Drop Notification Trigger
+    if (oldProduct && body.price && body.price < oldProduct.price) {
+      setImmediate(async () => {
+        try {
+          const wishlistedUsers = await prisma.wishlistItem.findMany({
+            where: { productId: id },
+            select: { userId: true }
+          });
+
+          for (const item of wishlistedUsers) {
+            await sendNotification({
+              userId: item.userId,
+              type: 'PRICE_DROP',
+              title: 'Price Drop Alert! 📉',
+              message: `A product in your wishlist "${oldProduct.name}" just dropped in price to $${body.price}!`,
+              link: `/products/${id}` // Or use slug if available
+            });
+          }
+        } catch (err) {
+          fastify.log.error(err, 'Failed to trigger price drop notifications');
+        }
+      });
+    }
+
+    return updated;
+  });
+
+  // Manual Stock Adjustment
+  fastify.post('/:id/stock', { preHandler: [fastify.authenticate, requireRole(['VENDOR']), requireOwnership('product')] }, async (request) => {
+    const { id } = request.params as { id: string };
+    const { variantId, change, reason } = request.body as { variantId?: string, change: number, reason: string };
+
+    const { adjustStock } = await import('../services/inventory.service');
+    await adjustStock({
+      productId: id,
+      variantId,
+      change,
+      reason: reason as any || 'MANUAL_ADJUSTMENT'
+    });
+
+    return { message: 'Stock adjusted' };
+  });
+
+  // Stock History
+  fastify.get('/:id/stock-history', { preHandler: [fastify.authenticate, requireRole(['VENDOR', 'ADMIN']), requireOwnership('product')] }, async (request) => {
+    const { id } = request.params as { id: string };
+    return prisma.stockEvent.findMany({
+      where: { productId: id },
+      orderBy: { createdAt: 'desc' },
+      include: { variant: true }
+    });
   });
 }

@@ -1,40 +1,44 @@
 import { prisma } from '@modcart/db';
 import { indexProduct, initIndex } from '@modcart/search';
+import { Prisma } from '@prisma/client';
 
-async function reindex() {
-  console.log('🔄 Initializing index...');
+type ProductWithIncludes = Prisma.ProductGetPayload<{
+  include: {
+    vendor: true,
+    categories: { include: { category: true } },
+    images: true
+  }
+}>;
+
+export async function runReindex() {
+  console.log('🔄 Starting full re-index...');
   await initIndex();
-
-  console.log('📦 Fetching products from database...');
-  const products = await prisma.product.findMany({
-    where: { status: 'ACTIVE' },
+  
+  const products: ProductWithIncludes[] = await prisma.product.findMany({
     include: {
-      categories: { include: { category: true } },
       vendor: true,
-    },
+      categories: { include: { category: true } },
+      images: true
+    }
   });
 
-  console.log(`🚀 Indexing ${products.length} products...`);
-  
-  for (const product of products) {
+  console.log(`📦 Found ${products.length} products to index.`);
+
+  for (const p of products) {
     await indexProduct({
-      id: product.id,
-      name: product.name,
-      description: product.description,
-      price: product.price,
-      vendorId: product.vendorId,
-      vendorName: product.vendor.storeName,
-      categories: product.categories.map(c => (c as any).category.name),
-      imageUrl: product.imageUrl,
+      id: p.id,
+      name: p.name,
+      description: p.description || '',
+      price: Number(p.price),
+      vendorId: p.vendorId,
+      vendorName: p.vendor.storeName,
+      categories: p.categories.map(c => c.category.name),
+      imageUrl: p.images[0]?.url || '',
+      imageUrls: p.images.map(img => img.url),
+      isVerified: true
     });
-    console.log(`✅ Indexed: ${product.name}`);
+    console.log(`✅ Indexed: ${p.name}`);
   }
 
   console.log('✨ Re-indexing complete!');
-  process.exit(0);
 }
-
-reindex().catch(err => {
-  console.error('❌ Re-indexing failed:', err);
-  process.exit(1);
-});

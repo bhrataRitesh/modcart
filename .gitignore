@@ -26,3 +26,7 @@ yarn-error.log*
 
 # Database
 prisma/migrations
+
+# Keep .modcart tracked in git (it is project documentation)
+# But ignore any sensitive session data
+.modcart/*.tmp

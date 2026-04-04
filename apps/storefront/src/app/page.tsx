@@ -1,7 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Search, ShoppingCart, User, ArrowRight, Star, X, MessageSquare, Send } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Search, ShoppingCart, User, ArrowRight, Star, X, MessageSquare, Send, ChevronLeft, ChevronRight } from 'lucide-react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements } from '@stripe/react-stripe-js';
+import CheckoutForm from '../components/CheckoutForm';
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 export default function Home() {
   const [products, setProducts] = useState<any[]>([]);
@@ -15,8 +22,9 @@ export default function Home() {
   const [reviews, setReviews] = useState<any[]>([]);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '' });
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [checkoutState, setCheckoutState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [checkoutState, setCheckoutState] = useState<'idle' | 'loading' | 'payment' | 'success' | 'error'>('idle');
   const [completedOrder, setCompletedOrder] = useState<string | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
   
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [accountData, setAccountData] = useState<any>(null);
@@ -34,6 +42,7 @@ export default function Home() {
 
   const [activeChatVendor, setActiveChatVendor] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [mainModalImage, setMainModalImage] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState('');
   const [ws, setWs] = useState<WebSocket | null>(null);
 
@@ -42,7 +51,7 @@ export default function Home() {
       const token = localStorage.getItem('token');
       if (!token) return;
       
-      fetch(`http://localhost:3001/api/v1/chat/history/${activeChatVendor}`, {
+      fetch(`${API_URL}/api/v1/chat/history/${activeChatVendor}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       .then(res => res.json())
@@ -87,14 +96,14 @@ export default function Home() {
       const token = localStorage.getItem('token');
       if (!token) return;
       
-      fetch('http://localhost:3001/api/v1/auth/me', {
+      fetch('${API_URL}/api/v1/auth/me', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
         .then(res => res.ok ? res.json() : null)
         .then(data => setAccountData(data))
         .catch(() => console.log('Auth check failed'));
         
-      fetch('http://localhost:3001/api/v1/orders', {
+      fetch('${API_URL}/api/v1/orders', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
         .then(res => res.json())
@@ -107,7 +116,7 @@ export default function Home() {
   }, [isAccountOpen]);
 
   useEffect(() => {
-    fetch('http://localhost:3001/api/v1/categories')
+    fetch('${API_URL}/api/v1/categories')
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setCategories(data);
@@ -130,7 +139,7 @@ export default function Home() {
     const token = localStorage.getItem('token');
     if (!token) return setCart(null);
     try {
-      const res = await fetch('http://localhost:3001/api/v1/cart', {
+      const res = await fetch('${API_URL}/api/v1/cart', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) setCart(await res.json());
@@ -149,9 +158,10 @@ export default function Home() {
     }
     if (minPrice) params.append('minPrice', minPrice);
     if (maxPrice) params.append('maxPrice', maxPrice);
+    params.append('t', Date.now().toString());
 
     const timer = setTimeout(() => {
-      fetch(`http://localhost:3001/api/v1/search?${params.toString()}`)
+      fetch(`${API_URL}/api/v1/search?${params.toString()}`)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) setProducts(data);
@@ -174,7 +184,7 @@ export default function Home() {
         ? { email: authEmail, password: authPassword }
         : { email: authEmail, password: authPassword, firstName: authFirstName, lastName: authLastName };
 
-      const res = await fetch(`http://localhost:3001/api/v1/auth/${endpoint}`, {
+      const res = await fetch(`${API_URL}/api/v1/auth/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -184,7 +194,7 @@ export default function Home() {
       if (res.ok) {
         if (authMode === 'register') {
           // Auto login after register
-          const loginRes = await fetch('http://localhost:3001/api/v1/auth/login', {
+          const loginRes = await fetch('${API_URL}/api/v1/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: authEmail, password: authPassword })
@@ -223,7 +233,7 @@ export default function Home() {
       setIsAccountOpen(true);
       return;
     }
-    const res = await fetch('http://localhost:3001/api/v1/cart/items', {
+    const res = await fetch('${API_URL}/api/v1/cart/items', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -248,7 +258,7 @@ export default function Home() {
     }
     
     try {
-      const res = await fetch(`http://localhost:3001/api/v1/cart/items/${itemId}`, {
+      const res = await fetch(`${API_URL}/api/v1/cart/items/${itemId}`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
@@ -268,7 +278,7 @@ export default function Home() {
     if (!token) return;
     
     try {
-      const res = await fetch(`http://localhost:3001/api/v1/cart/items/${itemId}`, {
+      const res = await fetch(`${API_URL}/api/v1/cart/items/${itemId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -280,7 +290,7 @@ export default function Home() {
   };
 
   const fetchReviews = (productId: string) => {
-    fetch(`http://localhost:3001/api/v1/reviews/${productId}`)
+    fetch(`${API_URL}/api/v1/reviews/${productId}`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setReviews(data);
@@ -297,7 +307,7 @@ export default function Home() {
 
   const submitReview = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('http://localhost:3001/api/v1/reviews', {
+    const res = await fetch('${API_URL}/api/v1/reviews', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -322,7 +332,7 @@ export default function Home() {
     
     setCheckoutState('loading');
     try {
-      const res = await fetch('http://localhost:3001/api/v1/payments/checkout', {
+      const res = await fetch(`${API_URL}/api/v1/payments/checkout`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -333,12 +343,9 @@ export default function Home() {
       const data = await res.json();
       
       if (res.ok && data.clientSecret) {
-        // Mocking client-side Stripe fulfillment for smooth UX
-        setTimeout(() => {
-          setCheckoutState('success');
-          setCompletedOrder(data.orderId);
-          setCart({ items: [] });
-        }, 1500);
+        setClientSecret(data.clientSecret);
+        setCompletedOrder(data.orderId);
+        setCheckoutState('payment');
       } else {
         setCheckoutState('error');
         showToast(data.message || 'Checkout failed', 'error');
@@ -485,6 +492,7 @@ export default function Home() {
                 className="glass p-4 rounded-3xl card-hover flex flex-col h-full border-white/5 cursor-pointer"
                 onClick={() => {
                   setSelectedProduct(product);
+                  setMainModalImage(product.imageUrl);
                   fetchReviews(product.id);
                 }}
               >
@@ -533,16 +541,69 @@ export default function Home() {
               <X className="w-6 h-6" />
             </button>
 
-            <div className="md:w-1/2 p-8 border-r border-white/5">
-              <div className="aspect-square rounded-3xl bg-slate-800/50 flex items-center justify-center overflow-hidden mb-6">
-                {selectedProduct.imageUrl ? (
-                  <img src={selectedProduct.imageUrl} className="w-full h-full object-cover" />
+            <div className="md:w-1/2 p-8 border-r border-white/5 flex flex-col">
+              <div className="aspect-square rounded-3xl bg-slate-800/50 flex flex-col items-center justify-center overflow-hidden mb-6 relative group">
+                {(mainModalImage || selectedProduct.imageUrl) ? (
+                  <img src={mainModalImage || selectedProduct.imageUrl} className="w-full h-full object-cover transition duration-700 ease-in-out" />
                 ) : (
                   <span className="text-4xl font-bold text-slate-700">PHOTO</span>
                 )}
+                
+                {selectedProduct.imageUrls && selectedProduct.imageUrls.length > 1 && (
+                  <>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const idx = selectedProduct.imageUrls.indexOf(mainModalImage || selectedProduct.imageUrl);
+                        const next = idx === 0 ? selectedProduct.imageUrls.length - 1 : idx - 1;
+                        setMainModalImage(selectedProduct.imageUrls[next]);
+                      }}
+                      className="absolute left-4 p-3 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full opacity-0 group-hover:opacity-100 transition duration-300"
+                    >
+                      <ChevronLeft className="w-6 h-6" />
+                    </button>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const idx = selectedProduct.imageUrls.indexOf(mainModalImage || selectedProduct.imageUrl);
+                        const next = idx === selectedProduct.imageUrls.length - 1 ? 0 : idx + 1;
+                        setMainModalImage(selectedProduct.imageUrls[next]);
+                      }}
+                      className="absolute right-4 p-3 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full opacity-0 group-hover:opacity-100 transition duration-300"
+                    >
+                      <ChevronRight className="w-6 h-6" />
+                    </button>
+                    
+                    <div className="absolute bottom-4 flex gap-1.5">
+                      {selectedProduct.imageUrls.map((_: any, i: number) => (
+                        <div 
+                          key={i} 
+                          className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${ (mainModalImage || selectedProduct.imageUrl) === selectedProduct.imageUrls[i] ? 'bg-white w-4' : 'bg-white/40' }`}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
-              <h2 className="text-3xl font-bold mb-4">{selectedProduct.name}</h2>
-              <p className="text-gray-400 leading-relaxed mb-6">{selectedProduct.description}</p>
+              
+              {selectedProduct.imageUrls && selectedProduct.imageUrls.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto pb-4 mb-4 scrollbar-hide">
+                  {selectedProduct.imageUrls.map((url: string, idx: number) => (
+                    <button 
+                      key={idx} 
+                      onClick={() => setMainModalImage(url)}
+                      className={`w-16 h-16 rounded-xl overflow-hidden flex-shrink-0 border-2 transition-all ${mainModalImage === url ? 'border-blue-500 opacity-100' : 'border-transparent opacity-50 hover:opacity-100'}`}
+                    >
+                      <img src={url} className="w-full h-full object-cover" alt="" />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <h2 className="text-3xl font-bold mb-4">{selectedProduct.name}</h2>
+                <p className="text-gray-400 leading-relaxed mb-6">{selectedProduct.description}</p>
+              </div>
               <div className="flex justify-between items-center bg-white/5 p-6 rounded-3xl mt-6">
                 <span className="text-3xl font-bold">${selectedProduct.price}</span>
                 <div className="flex gap-4">
@@ -863,21 +924,37 @@ export default function Home() {
                   <span className="text-2xl font-bold">${cartTotal.toFixed(2)}</span>
                 </div>
                 
-                <button 
-                  onClick={handleCheckout} 
-                  disabled={checkoutState === 'loading'}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(37,99,235,0.3)] disabled:opacity-50"
-                  style={{ backgroundImage: 'linear-gradient(to right, #2563eb, #7c3aed)' }}
-                >
-                  {checkoutState === 'loading' ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      Processing...
-                    </>
-                  ) : (
-                    'Secure Checkout'
-                  )}
-                </button>
+                {checkoutState === 'payment' && clientSecret ? (
+                  <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: 'night' } }}>
+                    <CheckoutForm 
+                      amount={cartTotal}
+                      onSuccess={() => {
+                        setCheckoutState('success');
+                        setCart({ items: [] });
+                      }}
+                      onError={(msg) => {
+                        showToast(msg, 'error');
+                        setCheckoutState('idle');
+                      }}
+                    />
+                  </Elements>
+                ) : (
+                  <button 
+                    onClick={handleCheckout} 
+                    disabled={checkoutState === 'loading'}
+                    className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(37,99,235,0.3)] disabled:opacity-50"
+                    style={{ backgroundImage: 'linear-gradient(to right, #2563eb, #7c3aed)' }}
+                  >
+                    {checkoutState === 'loading' ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        Processing...
+                      </>
+                    ) : (
+                      'Secure Checkout'
+                    )}
+                  </button>
+                )}
               </div>
             )}
           </div>

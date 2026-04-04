@@ -1,23 +1,20 @@
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { prisma } from '@modcart/db';
 import { hashPassword, verifyPassword } from '@modcart/core';
+import { validate } from '../middleware/validate';
+import { registerSchema, loginSchema, updateMeSchema, addressSchema } from '../schemas/auth.schema';
+import { z } from 'zod';
+import { UserPayload } from '../types';
+import crypto from 'crypto';
 
-const registerSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  firstName: z.string(),
-  lastName: z.string(),
-});
-
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string(),
-});
+type RegisterBody = z.infer<typeof registerSchema>;
+type LoginBody = z.infer<typeof loginSchema>;
+type UpdateMeBody = z.infer<typeof updateMeSchema>;
+type AddressBody = z.infer<typeof addressSchema>;
 
 export default async function authRoutes(fastify: FastifyInstance) {
-  fastify.post('/register', async (request, reply) => {
-    const body = registerSchema.parse(request.body);
+  fastify.post('/register', { preHandler: [validate(registerSchema)] }, async (request, reply) => {
+    const body = request.body as RegisterBody;
 
     const existingUser = await prisma.user.findUnique({
       where: { email: body.email },
@@ -41,8 +38,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
     return { id: user.id, email: user.email };
   });
 
-  fastify.post('/login', async (request, reply) => {
-    const body = loginSchema.parse(request.body);
+  fastify.post('/login', { preHandler: [validate(loginSchema)] }, async (request, reply) => {
+    const body = request.body as LoginBody;
 
     const user = await prisma.user.findUnique({
       where: { email: body.email },
@@ -77,8 +74,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   // Get full user profile
-  fastify.get('/me', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const userJwt = request.user as { id: string };
+  fastify.get('/me', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const userJwt = request.user as UserPayload;
     const user = await prisma.user.findUnique({
       where: { id: userJwt.id },
       select: {
@@ -99,9 +96,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   // Update user profile
-  fastify.put('/me', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const userJwt = request.user as { id: string };
-    const body = request.body as any; 
+  fastify.put('/me', { preHandler: [fastify.authenticate, validate(updateMeSchema)] }, async (request, reply) => {
+    const userJwt = request.user as UserPayload;
+    const body = request.body as UpdateMeBody; 
 
     const user = await prisma.user.update({
       where: { id: userJwt.id },
@@ -122,9 +119,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   // Add address
-  fastify.post('/me/addresses', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const userJwt = request.user as { id: string };
-    const body = request.body as any;
+  fastify.post('/me/addresses', { preHandler: [fastify.authenticate, validate(addressSchema)] }, async (request, reply) => {
+    const userJwt = request.user as UserPayload;
+    const body = request.body as AddressBody;
 
     const address = await prisma.address.create({
       data: {
@@ -145,5 +142,50 @@ export default async function authRoutes(fastify: FastifyInstance) {
     return address;
   });
 
+  // Forgot password
+  fastify.post('/forgot-password', async (request, reply) => {
+    const { email } = request.body as { email: string };
+    const user = await prisma.user.findUnique({ where: { email } });
 
+    if (user) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 3600000); // 1 hour
+
+      await prisma.verificationToken.upsert({
+        where: { userId_type: { userId: user.id, type: 'PASSWORD_RESET' } },
+        update: { token, expiresAt },
+        create: { userId: user.id, token, type: 'PASSWORD_RESET', expiresAt }
+      });
+
+      const { sendPasswordResetEmail } = await import('../services/email.service');
+      await sendPasswordResetEmail(user.email, token);
+    }
+
+    return { message: 'If that email exists, we have sent a reset link.' };
+  });
+
+  // Reset password
+  fastify.post('/reset-password', async (request, reply) => {
+    const { token, password } = request.body as { token: string, password: string };
+
+    const vt = await prisma.verificationToken.findUnique({
+      where: { token },
+      include: { user: true }
+    });
+
+    if (!vt || vt.type !== 'PASSWORD_RESET' || vt.expiresAt < new Date()) {
+      return reply.code(400).send({ message: 'Invalid or expired token' });
+    }
+
+    const hashedPassword = await hashPassword(password);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: vt.userId },
+        data: { passwordHash: hashedPassword }
+      }),
+      prisma.verificationToken.delete({ where: { id: vt.id } })
+    ]);
+
+    return { message: 'Password reset successful' };
+  });
 }

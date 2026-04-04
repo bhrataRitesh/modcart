@@ -1,13 +1,14 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
+import { UserPayload } from '../types';
 
 // Registries for active WebSocket connections
 const activeCustomerSockets = new Map<string, Set<any>>();
 const activeVendorSockets = new Map<string, Set<any>>();
 
 export default async function chatRoutes(fastify: FastifyInstance) {
-  fastify.get('/history/:vendorId', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const user = request.user as { id: string };
+  fastify.get('/history/:vendorId', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
     const { vendorId } = request.params as { vendorId: string };
     
     return prisma.chatMessage.findMany({
@@ -20,8 +21,8 @@ export default async function chatRoutes(fastify: FastifyInstance) {
   });
 
   // Fetch unique chat contacts for a vendor
-  fastify.get('/vendor/contacts', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const user = request.user as { id: string, role: string };
+  fastify.get('/vendor/contacts', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
     if (user.role !== 'VENDOR') return reply.code(403).send({ error: 'Vendor only' });
 
     const vendorProfile = await prisma.vendorProfile.findUnique({ where: { userId: user.id } });
@@ -38,8 +39,8 @@ export default async function chatRoutes(fastify: FastifyInstance) {
   });
 
   // Fetch chat history with a specific customer for a vendor
-  fastify.get('/vendor/history/:customerId', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const user = request.user as { id: string, role: string };
+  fastify.get('/vendor/history/:customerId', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
     const { customerId } = request.params as { customerId: string };
     if (user.role !== 'VENDOR') return reply.code(403).send({ error: 'Vendor only' });
 
@@ -56,7 +57,8 @@ export default async function chatRoutes(fastify: FastifyInstance) {
   });
 
   // WebSocket Live Connection
-  fastify.get('/ws/:vendorId', { websocket: true }, async (socket: any, req) => {
+  fastify.get('/ws/:vendorId', { websocket: true }, async (connection, req) => {
+    const { socket } = connection;
     const { vendorId } = req.params as { vendorId: string };
     const query = req.query as { token?: string };
     
@@ -65,9 +67,9 @@ export default async function chatRoutes(fastify: FastifyInstance) {
       return socket.close(1008, 'Auth Required');
     }
 
-    let user: any;
+    let user: UserPayload;
     try {
-      user = fastify.jwt.verify(query.token);
+      user = fastify.jwt.verify(query.token) as UserPayload;
     } catch (err) {
       return socket.close(1008, 'Invalid Token');
     }
@@ -84,7 +86,7 @@ export default async function chatRoutes(fastify: FastifyInstance) {
     socket.on('message', async (data: Buffer) => {
       try {
         const payloadStr = data.toString();
-        let payload: any;
+        let payload: { content: string, customerId?: string };
         
         try {
           payload = JSON.parse(payloadStr);

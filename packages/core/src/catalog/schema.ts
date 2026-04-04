@@ -12,4 +12,5 @@ export const productSchema = z.object({
   price: z.number().positive(),
   stockQty: z.number().int().nonnegative(),
   categoryIds: z.array(z.string()).min(1),
+  imageUrl: z.string().url().optional().nullable(),
 });

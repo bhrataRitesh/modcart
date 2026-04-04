@@ -1,34 +1,42 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
+import { validate } from '../middleware/validate';
+import { createReviewSchema } from '../schemas/review.schema';
+import { requireRole } from '../middleware/rbac';
+import { UserPayload } from '../types';
 import { z } from 'zod';
 
-const reviewSchema = z.object({
-  productId: z.string(),
-  rating: z.number().min(1).max(5),
-  comment: z.string().optional(),
-});
+type CreateReviewBody = z.infer<typeof createReviewSchema>;
 
 export default async function reviewRoutes(fastify: FastifyInstance) {
   // Get reviews for a product
   fastify.get('/:productId', async (request) => {
-    const { productId } = request.params as { productId: string };
+    const { productId } = (request.params as { productId: string });
     return prisma.review.findMany({
       where: { productId },
-      include: { user: true },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          }
+        }
+      },
       orderBy: { createdAt: 'desc' },
     });
   });
 
   // Submit a review
-  fastify.post('/', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const body = reviewSchema.parse(request.body);
-    const user = request.user as { id: string };
+  fastify.post('/', { preHandler: [fastify.authenticate, validate(createReviewSchema)] }, async (request, reply) => {
+    const body = request.body as CreateReviewBody;
+    const userJwt = request.user as UserPayload;
 
     // Check if user already reviewed this product
     const existing = await prisma.review.findFirst({
       where: {
         productId: body.productId,
-        userId: user.id,
+        userId: userJwt.id,
       },
     });
 
@@ -39,7 +47,7 @@ export default async function reviewRoutes(fastify: FastifyInstance) {
     const review = await prisma.review.create({
       data: {
         productId: body.productId,
-        userId: user.id,
+        userId: userJwt.id,
         rating: body.rating,
         comment: body.comment,
       },
@@ -49,14 +57,8 @@ export default async function reviewRoutes(fastify: FastifyInstance) {
   });
 
   // Admin: Delete a review (Moderation)
-  fastify.delete('/:id', { preHandler: [(fastify as any).authenticate] }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const user = request.user as any;
-
-    // Only allow ADMIN or SUPERADMIN to delete reviews for moderation
-    if (user.role !== 'ADMIN' && user.role !== 'SUPERADMIN') {
-      return reply.code(403).send({ message: 'Forbidden: Admin access required to moderate reviews' });
-    }
+  fastify.delete('/:id', { preHandler: [fastify.authenticate, requireRole(['ADMIN', 'SUPERADMIN'])] }, async (request, reply) => {
+    const { id } = (request.params as { id: string });
 
     try {
       await prisma.review.delete({

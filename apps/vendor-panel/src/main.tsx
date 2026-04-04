@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 
+const API_URL = (import.meta as any).env.VITE_API_URL || 'http://localhost:3001';
+
 const VendorPanel = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('vendor_token'));
 
@@ -25,6 +27,9 @@ const VendorPanel = () => {
   const [view, setView] = useState<'dashboard' | 'inventory' | 'orders' | 'messages' | 'payouts'>('dashboard');
   const [payouts, setPayouts] = useState<any[]>([]);
   const [payoutStats, setPayoutStats] = useState<any>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
   
   // Chat States
   const [contacts, setContacts] = useState<any[]>([]);
@@ -33,31 +38,39 @@ const VendorPanel = () => {
   const [chatInput, setChatInput] = useState('');
   const ws = useRef<WebSocket | null>(null);
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<any>({
     name: '',
     description: '',
     price: 0,
     stockQty: 0,
     categoryId: '',
     imageUrl: '',
+    options: [],
+    variants: []
   });
   const [isUploading, setIsUploading] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const [analytics, setAnalytics] = useState<any>(null);
 
   const fetchData = async () => {
     if (!token) return;
     try {
-      const statsRes = await fetch('http://localhost:3001/api/v1/vendor/stats', { headers: { 'Authorization': `Bearer ${token}` } });
+      const statsRes = await fetch(`${API_URL}/api/v1/vendor/stats`, { headers: { 'Authorization': `Bearer ${token}` } });
       if (statsRes.ok) {
         const data = await statsRes.json();
         setStats(data.stats);
         setRecentOrders(data.recentOrders);
       } else { logout(); }
 
-      fetch('http://localhost:3001/api/v1/products').then(r => r.json()).then(d => setProducts(Array.isArray(d) ? d : []));
-      fetch('http://localhost:3001/api/v1/categories').then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []));
-      fetch('http://localhost:3001/api/v1/payouts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayouts(d));
-      fetch('http://localhost:3001/api/v1/payouts/stats', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayoutStats(d));
-      fetch('http://localhost:3001/api/v1/chat/vendor/contacts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
+      fetch(`${API_URL}/api/v1/products`, { cache: 'no-cache' }).then(r => r.json()).then(d => setProducts(Array.isArray(d) ? d : []));
+      fetch(`${API_URL}/api/v1/categories`).then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []));
+      fetch(`${API_URL}/api/v1/payouts`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayouts(d));
+      fetch(`${API_URL}/api/v1/payouts/stats`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setPayoutStats(d));
+      fetch(`${API_URL}/api/v1/chat/vendor/contacts`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
+      
+      const analRes = await fetch(`${API_URL}/api/v1/vendor/analytics`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (analRes.ok) setAnalytics(await analRes.json());
     } catch (e) { console.error(e); }
   };
 
@@ -66,7 +79,8 @@ const VendorPanel = () => {
   }, [token]);
 
   useEffect(() => {
-    if (token && stats) {
+    if (token) {
+      // Chat WebSocket
       const socket = new WebSocket(`ws://localhost:3001/api/v1/chat/ws/me?token=${token}`);
       socket.onmessage = (event) => {
         try {
@@ -77,17 +91,41 @@ const VendorPanel = () => {
             }
             return prev;
           });
-          fetch('http://localhost:3001/api/v1/chat/vendor/contacts', { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
+          fetch(`${API_URL}/api/v1/chat/vendor/contacts`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).then(d => setContacts(d));
         } catch (e) {}
       };
       ws.current = socket;
-      return () => socket.close();
+
+      // Notification WebSocket
+      const notifWs = new WebSocket(`ws://localhost:3001/api/v1/notifications/ws?token=${token}`);
+      notifWs.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'INITIAL_STATE') {
+          setUnreadCount(data.unreadCount);
+        } else if (data.type === 'NOTIFICATION') {
+          setNotifications(prev => [data.notification, ...prev]);
+          setUnreadCount(prev => prev + 1);
+        }
+      };
+
+      const fetchNotifications = async () => {
+        const res = await fetch(`${API_URL}/api/v1/notifications`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) setNotifications(await res.json());
+      };
+      fetchNotifications();
+
+      return () => {
+        socket.close();
+        notifWs.close();
+      };
     }
-  }, [token, stats, activeContact]);
+  }, [token, activeContact]);
 
   useEffect(() => {
     if (activeContact && token) {
-      fetch(`http://localhost:3001/api/v1/chat/vendor/history/${activeContact.id}`, { headers: { 'Authorization': `Bearer ${token}` } })
+      fetch(`${API_URL}/api/v1/chat/vendor/history/${activeContact.id}`, { headers: { 'Authorization': `Bearer ${token}` } })
       .then(res => res.json()).then(data => setChatMessages(Array.isArray(data) ? data : []));
     }
   }, [activeContact, token]);
@@ -102,7 +140,7 @@ const VendorPanel = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('http://localhost:3001/api/v1/auth/login', {
+      const res = await fetch('${API_URL}/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: authEmail, password: authPassword }),
@@ -125,7 +163,7 @@ const VendorPanel = () => {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const res = await fetch('http://localhost:3001/api/v1/vendor/upload', {
+      const res = await fetch('${API_URL}/api/v1/vendor/upload', {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData,
       });
       const data = await res.json();
@@ -133,26 +171,82 @@ const VendorPanel = () => {
     } finally { setIsUploading(false); }
   };
 
-  const addProduct = async (e: React.FormEvent) => {
+  const addOption = () => {
+    setForm({ ...form, options: [...form.options, { name: '', type: 'SELECT', required: true, values: [] }] });
+  };
+
+  const updateOption = (idx: number, field: string, value: string) => {
+    const newOptions = [...form.options];
+    if (field === 'values') {
+      newOptions[idx].values = value.split(',').map(v => ({ name: v.trim() }));
+    } else {
+      newOptions[idx][field] = value;
+    }
+    setForm({ ...form, options: newOptions });
+  };
+
+  const generateVariants = () => {
+    if (form.options.length === 0) return;
+    
+    const combine = (list: any[], n = 0, result: string[] = [], current: string[] = []) => {
+      if (n === list.length) {
+        result.push(current.join(' / '));
+        return result;
+      }
+      for (const val of list[n].values) {
+        combine(list, n + 1, result, [...current, val.name]);
+      }
+      return result;
+    };
+
+    const combinations = combine(form.options);
+    const variants = combinations.map(c => ({
+      sku: `${form.name.slice(0, 3).toUpperCase()}-${c.replace(/ \/ /g, '-').toUpperCase()}`,
+      price: form.price,
+      stockQty: form.stockQty,
+      imageId: ''
+    }));
+    setForm({ ...form, variants });
+  };
+
+  const saveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('http://localhost:3001/api/v1/products', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    const url = editingId ? `${API_URL}/api/v1/products/${editingId}` : '${API_URL}/api/v1/products';
+    const method = editingId ? 'PUT' : 'POST';
+
+    const res = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ ...form, categoryIds: [form.categoryId] }),
     });
     if (res.ok) {
-      setForm({ name: '', description: '', price: 0, stockQty: 0, categoryId: '', imageUrl: '' });
+      setForm({ name: '', description: '', price: 0, stockQty: 0, categoryId: '', imageUrl: '', options: [], variants: [] });
+      setEditingId(null);
       fetchData();
     }
   };
 
+  const editProduct = (p: any) => {
+    setEditingId(p.id);
+    setForm({
+      name: p.name,
+      description: p.description || '',
+      price: p.price,
+      stockQty: p.stockQty,
+      categoryId: p.categories?.[0]?.categoryId || '',
+      imageUrl: p.images?.[0]?.url || '',
+      options: p.options || [],
+      variants: p.variants || []
+    });
+  };
+
   const deleteProduct = async (id: string) => {
     if(!confirm('Delete this product?')) return;
-    const res = await fetch(`http://localhost:3001/api/v1/products/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    const res = await fetch(`${API_URL}/api/v1/products/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
     if(res.ok) fetchData();
   };
 
   const handlePayoutRequest = async () => {
-    const res = await fetch('http://localhost:3001/api/v1/payouts/request', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+    const res = await fetch('${API_URL}/api/v1/payouts/request', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
     if (res.ok) { alert('Payout requested!'); fetchData(); }
   };
 
@@ -206,22 +300,88 @@ const VendorPanel = () => {
       </aside>
 
       <main style={{ flex: 1, padding: '2.5rem', overflowY: 'auto' }}>
-        <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', textTransform: 'capitalize', marginBottom: '2.5rem' }}>{view}</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2.5rem' }}>
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', textTransform: 'capitalize', margin: 0 }}>{view}</h2>
+          
+          <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setShowNotifications(!showNotifications)}>
+            <span style={{ fontSize: '1.5rem' }}>🔔</span>
+            {unreadCount > 0 && (
+              <div style={{ 
+                position: 'absolute', top: '-5px', right: '-5px', 
+                backgroundColor: '#ef4444', color: 'white', fontSize: '0.65rem', 
+                fontWeight: 'bold', padding: '2px 6px', borderRadius: '10px',
+                border: '2px solid #0a0f1c'
+              }}>{unreadCount}</div>
+            )}
+
+            {showNotifications && (
+              <div className="glass" style={{ 
+                position: 'absolute', top: '40px', right: '0', width: '320px', 
+                maxHeight: '450px', overflowY: 'auto', zIndex: 1000, padding: '1.25rem',
+                boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.1)',
+                animation: 'fadeIn 0.2s ease-out'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '1rem' }}>Notifications</h4>
+                  <button 
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await fetch(`${API_URL}/api/v1/notifications/read-all`, { 
+                        method: 'PATCH', 
+                        headers: { 'Authorization': `Bearer ${token}` } 
+                      });
+                      setUnreadCount(0);
+                      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+                    }}
+                    style={{ fontSize: '0.75rem', color: '#8b5cf6', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  >
+                    Mark all as read
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {notifications.map((n: any) => (
+                    <div key={n.id} style={{ 
+                      padding: '1rem', borderRadius: '0.75rem', 
+                      backgroundColor: n.isRead ? 'transparent' : 'rgba(139, 92, 246, 0.05)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      fontSize: '0.9rem',
+                      lineHeight: '1.4'
+                    }}>
+                      <div style={{ fontWeight: '700', marginBottom: '0.25rem', color: n.isRead ? '#94a3b8' : 'white' }}>{n.title}</div>
+                      <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{n.message}</div>
+                      <div style={{ fontSize: '0.7rem', marginTop: '0.6rem', opacity: 0.4, fontStyle: 'italic' }}>{new Date(n.createdAt).toLocaleString()}</div>
+                    </div>
+                  ))}
+                  {notifications.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '2rem 0', opacity: 0.5 }}>
+                      <p style={{ fontSize: '2rem', margin: '0 0 0.5rem 0' }}>👋</p>
+                      <p style={{ fontSize: '0.9rem' }}>No notifications for now.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
 
         {view === 'dashboard' && stats && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', animation: 'fadeIn 0.3s' }}>
-            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Total Earnings</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>${stats.totalEarnings.toLocaleString()}</h3></div>
-            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Store Orders</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.totalOrders}</h3></div>
-            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Active Listings</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.activeProducts}</h3></div>
-            <div className="glass" style={{ padding: '2rem' }}><p className="text-muted">Trust Score</p><h3 style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{stats.trustScore.toFixed(1)}</h3></div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', animation: 'fadeIn 0.3s' }}>
+            <div className="glass" style={{ padding: '1.5rem' }}><p className="text-muted">Total GMV</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>${stats.totalEarnings.toLocaleString()}</h3></div>
+            <div className="glass" style={{ padding: '1.5rem' }}><p className="text-muted">Orders</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>{stats.totalOrders}</h3></div>
+            <div className="glass" style={{ padding: '1.5rem' }}><p className="text-muted">Unique Visitors</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>{analytics?.visitors || 0}</h3></div>
+            <div className="glass" style={{ padding: '1.5rem' }}><p className="text-muted">Conversion Rate</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>{analytics?.conversionRate || 0}%</h3></div>
+            <div className="glass" style={{ padding: '1.5rem' }}><p className="text-muted">Listings</p><h3 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>{stats.activeProducts}</h3></div>
           </div>
         )}
 
         {view === 'inventory' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', animation: 'fadeIn 0.3s' }}>
             <section className="glass" style={{ padding: '2rem', height: 'fit-content' }}>
-              <h3 style={{ marginBottom: '1.5rem', fontWeight: 'bold' }}>New Listing</h3>
-              <form onSubmit={addProduct} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+                <h3 style={{ fontWeight: 'bold' }}>{editingId ? 'Edit Product' : 'New Listing'}</h3>
+                {editingId && <button onClick={() => { setEditingId(null); setForm({ name: '', description: '', price: 0, stockQty: 0, categoryId: '', imageUrl: '' }) }} className="btn-small">Cancel</button>}
+              </div>
+              <form onSubmit={saveProduct} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <input placeholder="Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
                 <textarea placeholder="Description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} style={{ minHeight: '100px' }} />
                 <div style={{ display: 'flex', gap: '1rem' }}>
@@ -236,15 +396,67 @@ const VendorPanel = () => {
                   {form.imageUrl ? <img src={form.imageUrl} style={{ height: '60px', borderRadius: '0.4rem' }} /> : (isUploading ? 'Uploading...' : 'Click to Upload Image')}
                   <input type="file" onChange={handleImageUpload} style={{ opacity: 0, position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: 'pointer' }} />
                 </div>
-                <button type="submit" className="btn btn-purple">Add Product</button>
+
+                <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>Product Options</h4>
+                    <button type="button" onClick={addOption} className="btn-small">+ Add Attribute</button>
+                  </div>
+                  {form.options.map((opt: any, idx: number) => (
+                    <div key={idx} style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.03)', padding: '1rem', borderRadius: '0.75rem', position: 'relative' }}>
+                      <input placeholder="Attribute (e.g. Size)" value={opt.name} onChange={e => updateOption(idx, 'name', e.target.value)} style={{ width: '100%', marginBottom: '0.5rem' }} />
+                      <input placeholder="Values (S, M, L)" value={opt.values.map((v: any) => v.name).join(', ')} onChange={e => updateOption(idx, 'values', e.target.value)} style={{ width: '100%', fontSize: '0.8rem' }} />
+                      <button type="button" onClick={() => setForm({ ...form, options: form.options.filter((_: any, i: number) => i !== idx) })} style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', background: 'none', border: 'none', color: '#ef4444', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                    </div>
+                  ))}
+                  {form.options.length > 0 && (
+                    <button type="button" onClick={generateVariants} className="btn-small" style={{ width: '100%', background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', marginBottom: '1rem' }}>
+                      Generate {form.variants.length > 0 ? 'New' : ''} Variants
+                    </button>
+                  )}
+                </div>
+
+                {form.variants.length > 0 && (
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 'bold', marginBottom: '1rem' }}>Variants ({form.variants.length})</h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '300px', overflowY: 'auto', paddingRight: '0.5rem' }}>
+                      {form.variants.map((v: any, idx: number) => (
+                        <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '0.5rem', alignItems: 'center' }}>
+                          <div style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.sku}</div>
+                          <input type="number" placeholder="Price" value={v.price} onChange={e => {
+                            const newV = [...form.variants];
+                            newV[idx].price = Number(e.target.value);
+                            setForm({ ...form, variants: newV });
+                          }} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
+                          <input type="number" placeholder="Qty" value={v.stockQty} onChange={e => {
+                            const newV = [...form.variants];
+                            newV[idx].stockQty = Number(e.target.value);
+                            setForm({ ...form, variants: newV });
+                          }} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button type="submit" className="btn btn-purple">{editingId ? 'Update Product' : 'Add Product'}</button>
               </form>
             </section>
             <div className="glass overflow-hidden">
                <table className="admin-table">
-                <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead>
+                <thead><tr><th>Image</th><th>Product</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead>
                 <tbody>
                   {products?.map(p => (
-                    <tr key={p.id}><td><b>{p.name}</b></td><td>${p.price}</td><td>{p.stockQty}</td><td><button onClick={() => deleteProduct(p.id)} className="btn-small btn-red">Delete</button></td></tr>
+                    <tr key={p.id}>
+                      <td>{p.images?.[0] ? <img src={p.images[0].url} style={{ width: '40px', borderRadius: '0.4rem' }} alt="" /> : '--'}</td>
+                      <td><b>{p.name}</b></td><td>${p.price}</td><td>{p.stockQty}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button onClick={() => editProduct(p)} className="btn-small">Edit</button>
+                          <button onClick={() => deleteProduct(p.id)} className="btn-small btn-red">Delete</button>
+                        </div>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -260,7 +472,12 @@ const VendorPanel = () => {
                 {recentOrders?.map(o => (
                   <tr key={o.id}>
                     <td><span className="mono">#{o?.orderId?.slice(-6).toUpperCase() || '---'}</span></td>
-                    <td>{o?.order?.user?.email || 'N/A'}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <b>{o?.order?.user?.firstName || 'Unknown'} {o?.order?.user?.lastName || ''}</b>
+                        <span style={{ fontSize: '0.75rem', color: '#8b5cf6' }}>{o?.order?.user?.email || 'N/A'}</span>
+                      </div>
+                    </td>
                     <td className="text-green">${o?.vendorEarnings?.toFixed(2)}</td>
                     <td><span className={`badge badge-${o?.status === 'SHIPPED' ? 'green' : 'yellow'}`}>{o?.status}</span></td>
                   </tr>
@@ -321,9 +538,10 @@ const VendorPanel = () => {
         .badge-yellow { background: rgba(245,158,11,0.1); color: #f59e0b; }
         .btn { padding: 0.75rem 1.5rem; border-radius: 0.75rem; border: none; font-weight: bold; cursor: pointer; }
         .btn-purple { background: #8b5cf6; color: white; }
-        .btn-small { padding: 0.4rem 0.8rem; border-radius: 0.5rem; border: none; cursor: pointer; font-size: 0.8rem; }
+        .btn-small { padding: 0.4rem 0.8rem; border-radius: 0.5rem; border: none; cursor: pointer; font-size: 0.8rem; background: rgba(255,255,255,0.05); color: white; }
         .btn-red { background: rgba(239,68,68,0.1); color: #ef4444; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        input, select, textarea { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 0.8rem; border-radius: 0.6rem; color: white; outline: none; }
       `}</style>
     </div>
   );

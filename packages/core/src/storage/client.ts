@@ -56,4 +56,18 @@ export class StorageClient {
     
     return `${protocol}://${host}:${port}/${this.bucket}/${fileName}`;
   }
+
+  async delete(fileName: string): Promise<void> {
+    await this.client.removeObject(this.bucket, fileName);
+  }
+
+  async listFiles(): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      const files: string[] = [];
+      const stream = this.client.listObjects(this.bucket, '', true);
+      stream.on('data', (obj: any) => files.push(obj.name));
+      stream.on('error', (err: any) => reject(err));
+      stream.on('end', () => resolve(files));
+    });
+  }
 }
