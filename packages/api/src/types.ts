@@ -3,7 +3,8 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 export interface UserPayload {
   id: string;
   email: string;
-  role: 'ADMIN' | 'VENDOR' | 'CUSTOMER' | 'SUPERADMIN';
+  role: 'ADMIN' | 'VENDOR' | 'VENDOR_STAFF' | 'CUSTOMER' | 'SUPERADMIN';
+  permissions?: string[];
 }
 
 declare module 'fastify' {

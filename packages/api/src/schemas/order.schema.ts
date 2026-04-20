@@ -4,14 +4,15 @@ export const orderStatusSchema = z.enum(['PENDING', 'PROCESSING', 'SHIPPED', 'DE
 
 export const createOrderSchema = z.object({
   guestEmail: z.string().email().optional(),
-  shippingAddressId: z.string().cuid().optional(),
+  shippingAddressId: z.string().cuid(),
   billingAddressId: z.string().cuid().optional(),
+  shippingMethodId: z.string().cuid(),
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().cuid(),
     variantId: z.string().cuid().optional(),
     quantity: z.number().int().positive()
-  })).min(1)
+  })).min(1).optional() // items comes from cart mostly, but allowing optional
 });
 
 export const updateOrderStatusSchema = z.object({

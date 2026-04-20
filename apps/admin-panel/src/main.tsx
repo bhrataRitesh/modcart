@@ -36,11 +36,28 @@ const AdminPanel = () => {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [view, setView] = useState<'stats' | 'users' | 'products' | 'orders' | 'vendors' | 'logs'>('stats');
+  const [features, setFeatures] = useState<any[]>([]);
+  const [view, setView] = useState<'stats' | 'users' | 'products' | 'orders' | 'vendors' | 'logs' | 'categories' | 'features'>('stats');
   
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [productForm, setProductForm] = useState({ name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [] as string[], imageUrls: [] as string[] });
+  const [productForm, setProductForm] = useState({ 
+    name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [] as string[], 
+    imageUrls: [] as string[], featureValues: [] as { featureId: string, value: string }[] 
+  });
+  
+  const [isAddingUser, setIsAddingUser] = useState(false);
+  const [userForm, setUserForm] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'CUSTOMER' });
+
+  const [isAddingVendor, setIsAddingVendor] = useState(false);
+  const [vendorForm, setVendorForm] = useState({ userId: '', storeName: '', description: '' });
+
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ name: '', description: '', parentId: '' });
+
+  const [isAddingFeature, setIsAddingFeature] = useState(false);
+  const [featureForm, setFeatureForm] = useState({ name: '', type: 'TEXT', isGlobal: true, options: '', categoryIds: [] as string[] });
+
   const [isUploading, setIsUploading] = useState(false);
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
@@ -107,6 +124,11 @@ const AdminPanel = () => {
        fetchData('vendors', setVendors);
        fetchGlobal('categories', setCategories);
     }
+    if (view === 'categories') fetchGlobal('categories', setCategories);
+    if (view === 'features') {
+      fetchData('features', setFeatures);
+      fetchGlobal('categories', setCategories);
+    }
     if (view === 'orders') fetchData('orders', setOrders);
     if (view === 'logs') fetchData('logs', setLogs);
   }, [token, view]);
@@ -162,7 +184,8 @@ const AdminPanel = () => {
       stockQty: p.stockQty,
       vendorId: p.vendorId || '',
       categoryIds: p.categories?.map((c: any) => c.categoryId) || [],
-      imageUrls: p.images?.map((img: any) => img.url) || []
+      imageUrls: p.images?.map((img: any) => img.url) || [],
+      featureValues: p.featureValues?.map((fv: any) => ({ featureId: fv.featureId, value: fv.value })) || []
     });
   };
 
@@ -172,22 +195,65 @@ const AdminPanel = () => {
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    const url = editingProductId ? `${API_URL}/api/v1/admin/products/${editingProductId}/update` : '${API_URL}/api/v1/admin/products';
+    const url = editingProductId ? `${API_URL}/api/v1/admin/products/${editingProductId}/update` : `${API_URL}/api/v1/admin/products`;
     const method = 'POST';
+    const payload = {
+      ...productForm,
+      images: productForm.imageUrls.map(url => ({ url, alt: productForm.name })),
+      categoryIds: productForm.categoryIds.filter(id => id !== '')
+    };
     try {
       const res = await fetch(url, {
-        method, headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(productForm)
+        method, 
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok) {
         setIsAddingProduct(false); setEditingProductId(null);
-        setProductForm({ name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [], imageUrls: [] });
+        setProductForm({ name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [], imageUrls: [], featureValues: [] });
         fetchData('products', setProducts);
         showToast(editingProductId ? 'Listing updated!' : 'Product published!');
       } else {
         showToast(data.message || 'Action failed', 'error');
       }
     } catch (e) { showToast('Network error', 'error'); }
+  };
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/v1/admin/users`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(userForm)
+      });
+      if (res.ok) {
+        setIsAddingUser(false);
+        setUserForm({ email: '', password: '', firstName: '', lastName: '', role: 'CUSTOMER' });
+        fetchData('users', setUsers);
+        showToast('User created successfully!');
+      } else {
+        const data = await res.json();
+        showToast(data.message || 'Action failed', 'error');
+      }
+    } catch { showToast('Network error', 'error'); }
+  };
+
+  const handleSaveVendor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/v1/admin/vendors`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(vendorForm)
+      });
+      if (res.ok) {
+        setIsAddingVendor(false);
+        setVendorForm({ userId: '', storeName: '', description: '' });
+        fetchData('vendors', setVendors);
+        showToast('Vendor profile created successfully!');
+      } else {
+        const data = await res.json();
+        showToast(data.message || 'Action failed', 'error');
+      }
+    } catch { showToast('Network error', 'error'); }
   };
 
   const deleteProduct = async (id: string) => {
@@ -236,6 +302,8 @@ const AdminPanel = () => {
           <SidebarItem id="stats" label="Overview" icon="📊" />
           <SidebarItem id="vendors" label="Vendors" icon="🏪" />
           <SidebarItem id="users" label="Users" icon="👥" />
+          <SidebarItem id="categories" label="Categories" icon="📁" />
+          <SidebarItem id="features" label="Features" icon="⚙️" />
           <SidebarItem id="products" label="Products" icon="📦" />
           <SidebarItem id="orders" label="Orders" icon="📑" />
           <SidebarItem id="logs" label="Audit Logs" icon="📜" />
@@ -311,8 +379,12 @@ const AdminPanel = () => {
         {view === 'products' && (
           <div style={{ animation: 'fadeIn 0.3s' }}>
              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
-               <button 
-                 onClick={() => { setEditingProductId(null); setIsAddingProduct(!isAddingProduct); setProductForm({ name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [], imageUrls: [] }); }} 
+                <button 
+                 onClick={() => { 
+                   setEditingProductId(null); 
+                   setIsAddingProduct(!isAddingProduct); 
+                   setProductForm({ name: '', description: '', price: 0, stockQty: 0, vendorId: '', categoryIds: [], imageUrls: [], featureValues: [] }); 
+                 }} 
                  className="btn-small btn-blue"
                >
                  {isAddingProduct || editingProductId ? 'Cancel' : '+ New Product'}
@@ -363,6 +435,51 @@ const AdminPanel = () => {
                    <input type="file" multiple onChange={handleFileUpload} />
                 </div>
                 <textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})} style={{ gridColumn: '1 / -1', minHeight: '100px' }} />
+                
+                {/* Advanced Features Section */}
+                {productForm.categoryIds.length > 0 && (
+                  <div style={{ gridColumn: '1 / -1', background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '1rem', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '1rem' }}>Product Features</h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                      {features
+                        .filter(f => f.isGlobal || f.categories?.some((cf:any) => productForm.categoryIds.includes(cf.categoryId)))
+                        .map(f => (
+                          <div key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                            <label style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{f.name} {f.isGlobal && <span style={{ color: '#3b82f6' }}>(Global)</span>}</label>
+                            {f.type === 'SELECT' ? (
+                              <select 
+                                value={productForm.featureValues.find(fv => fv.featureId === f.id)?.value || ''}
+                                onChange={e => {
+                                  const newVal = e.target.value;
+                                  setProductForm(prev => {
+                                    const filtered = prev.featureValues.filter(fv => fv.featureId !== f.id);
+                                    return { ...prev, featureValues: [...filtered, { featureId: f.id, value: newVal }] };
+                                  });
+                                }}
+                              >
+                                <option value="">Select {f.name}...</option>
+                                {f.options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                              </select>
+                            ) : (
+                              <input 
+                                type={f.type === 'NUMBER' ? 'number' : 'text'}
+                                placeholder={`Enter ${f.name}`}
+                                value={productForm.featureValues.find(fv => fv.featureId === f.id)?.value || ''}
+                                onChange={e => {
+                                  const newVal = e.target.value;
+                                  setProductForm(prev => {
+                                    const filtered = prev.featureValues.filter(fv => fv.featureId !== f.id);
+                                    return { ...prev, featureValues: [...filtered, { featureId: f.id, value: newVal }] };
+                                  });
+                                }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
                 <button type="submit" className="btn-small btn-blue" style={{ gridColumn: '1 / -1', padding: '1rem' }}>{editingProductId ? 'Update Listing' : 'Publish Product'}</button>
               </form>
             )}
@@ -423,11 +540,174 @@ const AdminPanel = () => {
         )}
 
         {view === 'vendors' && (
-           <div className="glass overflow-hidden"><table className="admin-table"><thead><tr><th>Store</th><th>Email</th><th>Products</th><th>Action</th></tr></thead><tbody>{vendors.map(v => (<tr key={v.id}><td><b>{v.storeName}</b></td><td>{v.user.email}</td><td>{v._count?.products || 0}</td><td><button onClick={() => handleImpersonation(v.user.id)} className="btn-small btn-blue">Login</button></td></tr>))}</tbody></table></div>
+           <div style={{ animation: 'fadeIn 0.3s' }}>
+             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+               <button onClick={() => { setIsAddingVendor(!isAddingVendor); setVendorForm({ userId: '', storeName: '', description: '' }); }} className="btn-small btn-blue">
+                 {isAddingVendor ? 'Cancel' : '+ New Vendor'}
+               </button>
+             </div>
+             {isAddingVendor && (
+               <form onSubmit={handleSaveVendor} className="glass" style={{ padding: '2rem', marginBottom: '2rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                 <select value={vendorForm.userId} onChange={e => setVendorForm({...vendorForm, userId: e.target.value})} required>
+                   <option value="">Select User Account</option>
+                   {users.filter(u => u.role === 'CUSTOMER' || u.role === 'VENDOR').map(u => <option key={u.id} value={u.id}>{u.email} ({u.firstName} {u.lastName})</option>)}
+                 </select>
+                 <input placeholder="Store Name" value={vendorForm.storeName} onChange={e => setVendorForm({...vendorForm, storeName: e.target.value})} required />
+                 <textarea placeholder="Store Description" value={vendorForm.description} onChange={e => setVendorForm({...vendorForm, description: e.target.value})} style={{ gridColumn: '1 / -1' }} />
+                 <button type="submit" className="btn-small btn-blue" style={{ gridColumn: '1 / -1', padding: '1rem' }}>Create Vendor Profile</button>
+               </form>
+             )}
+             <div className="glass overflow-hidden"><table className="admin-table"><thead><tr><th>Store</th><th>Email</th><th>Products</th><th>Action</th></tr></thead><tbody>{vendors.map(v => (<tr key={v.id}><td><b>{v.storeName}</b></td><td>{v.user.email}</td><td>{v._count?.products || 0}</td><td><button onClick={() => handleImpersonation(v.user.id)} className="btn-small btn-blue">Login</button></td></tr>))}</tbody></table></div>
+           </div>
         )}
 
         {view === 'users' && (
-          <div className="glass overflow-hidden"><table className="admin-table"><thead><tr><th>Email</th><th>Role</th><th>Status</th></tr></thead><tbody>{users.map(u => (<tr key={u.id}><td>{u.email}</td><td>{u.role}</td><td>Active</td></tr>))}</tbody></table></div>
+          <div style={{ animation: 'fadeIn 0.3s' }}>
+             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+               <button onClick={() => { setIsAddingUser(!isAddingUser); setUserForm({ email: '', password: '', firstName: '', lastName: '', role: 'CUSTOMER' }); }} className="btn-small btn-blue">
+                 {isAddingUser ? 'Cancel' : '+ New User'}
+               </button>
+             </div>
+             {isAddingUser && (
+               <form onSubmit={handleSaveUser} className="glass" style={{ padding: '2rem', marginBottom: '2rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                 <input placeholder="Email" type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} required />
+                 <input placeholder="Password" type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} />
+                 <input placeholder="First Name" value={userForm.firstName} onChange={e => setUserForm({...userForm, firstName: e.target.value})} required />
+                 <input placeholder="Last Name" value={userForm.lastName} onChange={e => setUserForm({...userForm, lastName: e.target.value})} required />
+                 <select value={userForm.role} onChange={e => setUserForm({...userForm, role: e.target.value})} required>
+                   <option value="CUSTOMER">Customer</option>
+                   <option value="VENDOR">Vendor</option>
+                   <option value="ADMIN">Admin</option>
+                   <option value="SUPERADMIN">Super Admin</option>
+                 </select>
+                 <button type="submit" className="btn-small btn-blue" style={{ gridColumn: '1 / -1', padding: '1rem' }}>Create User</button>
+               </form>
+             )}
+             <div className="glass overflow-hidden"><table className="admin-table"><thead><tr><th>Email</th><th>Role</th><th>Status</th></tr></thead><tbody>{users.map(u => (<tr key={u.id}><td>{u.email}</td><td>{u.role}</td><td>Active</td></tr>))}</tbody></table></div>
+          </div>
+        )}
+
+        {view === 'categories' && (
+          <div style={{ animation: 'fadeIn 0.3s' }}>
+             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+               <button onClick={() => { setIsAddingCategory(!isAddingCategory); setCategoryForm({ name: '', description: '', parentId: '' }); }} className="btn-small btn-blue">
+                 {isAddingCategory ? 'Cancel' : '+ New Category'}
+               </button>
+             </div>
+             {isAddingCategory && (
+               <form onSubmit={async (e) => {
+                 e.preventDefault();
+                 const res = await fetch(`${API_URL}/api/v1/categories`, {
+                   method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({...categoryForm, parentId: categoryForm.parentId || undefined})
+                 });
+                 if (res.ok) {
+                   setIsAddingCategory(false);
+                   fetchGlobal('categories', setCategories);
+                   showToast('Category created!');
+                 } else showToast('Category creation failed', 'error');
+               }} className="glass" style={{ padding: '2rem', marginBottom: '2rem', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
+                 <input placeholder="Name" value={categoryForm.name} onChange={e => setCategoryForm({...categoryForm, name: e.target.value})} required />
+                 <textarea placeholder="Description" value={categoryForm.description} onChange={e => setCategoryForm({...categoryForm, description: e.target.value})} />
+                 <select value={categoryForm.parentId} onChange={e => setCategoryForm({...categoryForm, parentId: e.target.value})}>
+                   <option value="">No Parent (Root Category)</option>
+                   {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                 </select>
+                 <button type="submit" className="btn-small btn-blue" style={{ padding: '1rem' }}>Create Category</button>
+               </form>
+             )}
+             <div className="glass overflow-hidden">
+               <table className="admin-table">
+                 <thead><tr><th>Name</th><th>Slug</th><th>Parent</th><th>Action</th></tr></thead>
+                 <tbody>
+                   {categories.map(c => (
+                     <tr key={c.id}>
+                       <td><b>{c.name}</b></td><td>{c.slug}</td><td>{c.parentId ? categories.find(p=>p.id===c.parentId)?.name : '--'}</td>
+                       <td><button onClick={async () => {
+                         if (!confirm('Are you sure?')) return;
+                         const res = await fetch(`${API_URL}/api/v1/categories/${c.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+                         if (res.ok) fetchGlobal('categories', setCategories);
+                       }} className="btn-small btn-red">Delete</button></td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+          </div>
+        )}
+
+        {view === 'features' && (
+          <div style={{ animation: 'fadeIn 0.3s' }}>
+             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+               <button onClick={() => { setIsAddingFeature(!isAddingFeature); setFeatureForm({ name: '', type: 'TEXT', isGlobal: true, options: '', categoryIds: [] }); }} className="btn-small btn-blue">
+                 {isAddingFeature ? 'Cancel' : '+ New Feature Spec'}
+               </button>
+             </div>
+             {isAddingFeature && (
+               <form onSubmit={async (e) => {
+                 e.preventDefault();
+                 const payload = { ...featureForm, options: featureForm.type === 'SELECT' ? featureForm.options.split(',').map(s=>s.trim()) : [] };
+                 const res = await fetch(`${API_URL}/api/v1/admin/features`, {
+                   method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                 });
+                 if (res.ok) {
+                   setIsAddingFeature(false);
+                   fetchData('features', setFeatures);
+                   showToast('Feature created!');
+                 } else showToast('Feature creation failed', 'error');
+               }} className="glass" style={{ padding: '2rem', marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                 <input placeholder="Feature Name (e.g., Color, Brand, CPU)" value={featureForm.name} onChange={e => setFeatureForm({...featureForm, name: e.target.value})} required />
+                 
+                 <div style={{ display: 'flex', gap: '1rem' }}>
+                   <select value={featureForm.type} onChange={e => setFeatureForm({...featureForm, type: e.target.value})} required style={{ flex: 1 }}>
+                     <option value="TEXT">Text</option>
+                     <option value="NUMBER">Number</option>
+                     <option value="SELECT">Dropdown Selection</option>
+                   </select>
+
+                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '0 1rem', borderRadius: '0.5rem' }}>
+                     <input type="checkbox" checked={featureForm.isGlobal} onChange={e => setFeatureForm({...featureForm, isGlobal: e.target.checked})} />
+                     Applies to all products?
+                   </label>
+                 </div>
+
+                 {featureForm.type === 'SELECT' && (
+                   <input placeholder="Options (comma separated, e.g. Red, Blue, Green)" value={featureForm.options} onChange={e => setFeatureForm({...featureForm, options: e.target.value})} required />
+                 )}
+
+                 {!featureForm.isGlobal && (
+                   <div>
+                     <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', color: '#94a3b8' }}>Assign to Categories</p>
+                     <select multiple value={featureForm.categoryIds} onChange={e => setFeatureForm({...featureForm, categoryIds: Array.from(e.target.selectedOptions, option => option.value)})} style={{ width: '100%', height: '120px' }}>
+                       {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                     </select>
+                     <p style={{ fontSize: '0.75rem', color: '#64748b' }}>Hold CMD/Ctrl to select multiple</p>
+                   </div>
+                 )}
+
+                 <button type="submit" className="btn-small btn-blue" style={{ padding: '1rem', marginTop: '1rem' }}>Create Feature</button>
+               </form>
+             )}
+             <div className="glass overflow-hidden">
+               <table className="admin-table">
+                 <thead><tr><th>Name</th><th>Type</th><th>Scope</th><th>Options</th><th>Action</th></tr></thead>
+                 <tbody>
+                   {features.map(f => (
+                     <tr key={f.id}>
+                       <td><b>{f.name}</b></td>
+                       <td><span className="badge-blue">{f.type}</span></td>
+                       <td>{f.isGlobal ? 'Global' : f.categories?.map((cf:any) => cf.category.name).join(', ')}</td>
+                       <td>{f.options?.join(', ') || '--'}</td>
+                       <td><button onClick={async () => {
+                         if (!confirm('Delete feature?')) return;
+                         const res = await fetch(`${API_URL}/api/v1/admin/features/${f.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+                         if (res.ok) fetchData('features', setFeatures);
+                       }} className="btn-small btn-red">Delete</button></td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+          </div>
         )}
 
         {view === 'logs' && (

@@ -1,6 +1,47 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from '@modcart/db';
 import { UserPayload } from '../types';
+import { cache } from '../lib/cache';
+
+export const requirePermission = (action: string) => {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const user = request.user as UserPayload;
+    if (!user) return reply.code(401).send({ message: 'Unauthorized' });
+
+    // SUPERADMIN always have access, no matter what permissions they have
+    if (user.role === 'SUPERADMIN') return;
+
+    // Fast path: check permissions embedded in JWT token
+    if (user.permissions && Array.isArray(user.permissions)) {
+      if (user.permissions.includes(action)) return;
+      return reply.code(403).send({ message: 'Forbidden: Missing required permission' });
+    }
+
+    // Fallback: fetch from DB + cache (for older tokens without embedded permissions)
+    const CACHE_KEY = `permissions:${user.id}`;
+    let permissions = await cache.get<string[]>(CACHE_KEY);
+
+    if (!permissions) {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: user.id },
+        include: {
+          groups: {
+            include: { permissions: true }
+          }
+        } as any
+      }) as any;
+
+      if (!dbUser) return reply.code(401).send({ message: 'Unauthorized' });
+
+      permissions = dbUser.groups.flatMap((g: any) => g.permissions.map((p: any) => p.action));
+      await cache.set(CACHE_KEY, permissions, 3600);
+    }
+
+    if (!permissions!.includes(action)) {
+      return reply.code(403).send({ message: 'Forbidden: Missing required permission' });
+    }
+  };
+};
 
 export const requireRole = (roles: string[]) => {
   return async (request: FastifyRequest, reply: FastifyReply) => {

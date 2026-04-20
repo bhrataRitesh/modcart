@@ -1,0 +1,7 @@
+{
+  "name": "Testing Product",
+  "description": "desc",
+  "price": 100,
+  "stockQty": 50,
+  "vendorId": "test"
+}

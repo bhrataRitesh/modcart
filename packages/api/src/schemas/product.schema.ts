@@ -46,7 +46,11 @@ export const createProductSchema = z.object({
     sortOrder: z.number().int().default(0)
   })).optional(),
   options: z.array(productOptionSchema).optional(),
-  variants: z.array(productVariantSchema).optional()
+  variants: z.array(productVariantSchema).optional(),
+  featureValues: z.array(z.object({
+    featureId: z.string(),
+    value: z.string()
+  })).optional()
 });
 
 export const updateProductSchema = createProductSchema.partial().extend({

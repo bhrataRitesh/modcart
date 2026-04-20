@@ -9,7 +9,7 @@ import { UserPayload } from '../types';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+const stripe = new Stripe(env.STRIPE_SECRET_KEY as string, {
   apiVersion: '2023-10-16' as any,
 });
 
@@ -30,13 +30,41 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ message: 'Cart is empty' });
     }
 
-    // Calculate totals
-    const totals = calculateTotals(
+    // Calculate item totals
+    const itemTotals = calculateTotals(
       cart.items.map(item => ({
         price: Number(item.product.price),
         quantity: item.quantity,
       }))
     );
+
+    // Dynamic Shipping & Tax
+    let shippingTotal = 0;
+    let taxTotal = 0;
+    let taxBreakdown = [];
+    
+    if (body.shippingAddressId && body.shippingMethodId) {
+      const address = await prisma.address.findUnique({ where: { id: body.shippingAddressId } });
+      if (address) {
+        // Calculate Shipping
+        const { calculateShipping } = await import('../services/shipping.service');
+        const availableMethods = await calculateShipping(cart.items, address);
+        const selectedMethod = availableMethods.find(m => m.id === body.shippingMethodId);
+        
+        if (!selectedMethod) {
+          return reply.code(400).send({ message: 'Invalid shipping method selected for the given address' });
+        }
+        shippingTotal = selectedMethod.rate;
+
+        // Calculate Tax
+        const { calculateTax } = await import('../services/tax.service');
+        const taxDetails = await calculateTax(itemTotals.subtotal, shippingTotal, address);
+        taxTotal = taxDetails.taxTotal;
+        taxBreakdown = taxDetails.breakdown;
+      }
+    }
+
+    const finalTotal = itemTotals.subtotal - itemTotals.discountTotal + shippingTotal + taxTotal;
 
     // Group items by vendor for VendorOrders
     const itemsByVendor: Record<string, typeof cart.items> = {};
@@ -52,15 +80,17 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       const mainOrder = await tx.order.create({
         data: {
           userId: user.id,
-          subtotal: totals.subtotal,
-          total: totals.total,
-          taxTotal: totals.taxTotal,
-          shippingTotal: totals.shippingTotal,
-          discountTotal: totals.discountTotal,
+          subtotal: itemTotals.subtotal,
+          total: finalTotal,
+          taxTotal: taxTotal,
+          shippingTotal: shippingTotal,
+          discountTotal: itemTotals.discountTotal,
           status: 'PENDING',
           paymentStatus: 'UNPAID',
           shippingAddressId: body.shippingAddressId,
           billingAddressId: body.billingAddressId,
+          shippingMethodId: body.shippingMethodId,
+          taxBreakdown: taxBreakdown,
           items: {
             create: cart.items.map(item => ({
               productId: item.productId,
@@ -198,4 +228,142 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     return updatedOrder;
   });
+
+  // ==========================================
+  // PHASE 9: RETURNS, REFUNDS & ORDER MANAGEMENT
+  // ==========================================
+
+  // Customer initiates return
+  fastify.post('/:id/return', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
+    const { id } = request.params as { id: string };
+    const { items, reason, resolution } = request.body as any; // items: { orderItemId: string, quantity: number, reason?: string }[]
+    
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { items: true }
+    });
+
+    if (!order || order.userId !== user.id) {
+      return reply.code(403).send({ message: 'Forbidden' });
+    }
+
+    const returnReq = await prisma.returnRequest.create({
+      data: {
+        orderId: order.id,
+        userId: user.id,
+        reason,
+        resolution,
+        items: {
+          create: items.map((item: any) => ({
+            orderItemId: item.orderItemId,
+            quantity: item.quantity,
+            reason: item.reason
+          }))
+        }
+      }
+    });
+
+    return returnReq;
+  });
+
+  // Invoice PDF Generation
+  fastify.get('/:id/invoice.pdf', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
+    const { id } = request.params as { id: string };
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { vendorOrders: { include: { vendor: true } } }
+    });
+
+    if (!order) return reply.code(404).send({ message: 'Order not found' });
+    
+    if (user.role !== 'ADMIN' && user.role !== 'SUPERADMIN' && order.userId !== user.id) {
+       const isVendorOfOrder = order.vendorOrders.some(vo => vo.vendor.userId === user.id);
+       if (!isVendorOfOrder) {
+         return reply.code(403).send({ message: 'Forbidden' });
+       }
+    }
+
+    const { generateInvoicePDF } = await import('../services/invoice.service');
+    
+    try {
+      const pdfBuffer = await generateInvoicePDF(order.id);
+      reply.header('Content-Type', 'application/pdf');
+      reply.header('Content-Disposition', `attachment; filename=invoice-${order.orderNumber}.pdf`);
+      return pdfBuffer;
+    } catch (e) {
+      return reply.code(500).send({ message: 'Failed to generate PDF' });
+    }
+  });
+
+  // Order Notes - Get Notes
+  fastify.get('/:id/notes', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
+    const { id } = request.params as { id: string };
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { vendorOrders: { include: { vendor: true } } }
+    });
+
+    if (!order) return reply.code(404).send({ message: 'Order not found' });
+
+    let isInternalAllowed = false;
+    if (user.role === 'ADMIN' || user.role === 'SUPERADMIN') {
+      isInternalAllowed = true;
+    } else {
+      const isVendorOfOrder = order.vendorOrders.some(vo => vo.vendor.userId === user.id);
+      if (isVendorOfOrder) isInternalAllowed = true;
+      else if (order.userId !== user.id) return reply.code(403).send({ message: 'Forbidden' });
+    }
+
+    const notes = await prisma.orderNote.findMany({
+      where: {
+        orderId: id,
+        ...(isInternalAllowed ? {} : { isInternal: false })
+      },
+      include: { user: { select: { firstName: true, lastName: true, email: true, role: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return notes;
+  });
+
+  // Order Notes - Add Note
+  fastify.post('/:id/notes', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as UserPayload;
+    const { id } = request.params as { id: string };
+    const { content, isInternal } = request.body as { content: string, isInternal?: boolean };
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { vendorOrders: { include: { vendor: true } } }
+    });
+
+    if (!order) return reply.code(404).send({ message: 'Order not found' });
+
+    let allowInternal = false;
+    if (user.role === 'ADMIN' || user.role === 'SUPERADMIN') {
+      allowInternal = true;
+    } else {
+      const isVendorOfOrder = order.vendorOrders.some(vo => vo.vendor.userId === user.id);
+      if (isVendorOfOrder) allowInternal = true;
+      else if (order.userId !== user.id) return reply.code(403).send({ message: 'Forbidden' });
+    }
+
+    const savedNote = await prisma.orderNote.create({
+      data: {
+        orderId: id,
+        userId: user.id,
+        content,
+        isInternal: allowInternal ? (isInternal || false) : false
+      },
+      include: { user: { select: { firstName: true, lastName: true, role: true } } }
+    });
+
+    return savedNote;
+  });
+
 }

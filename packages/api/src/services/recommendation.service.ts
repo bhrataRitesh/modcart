@@ -1,4 +1,5 @@
 import { prisma } from '@modcart/db';
+import { cache } from '../lib/cache';
 
 export const getSimilarProducts = async (productId: string, limit = 4) => {
   const product = await prisma.product.findUnique({
@@ -56,6 +57,10 @@ export const getAlsoBought = async (productId: string, limit = 4) => {
 };
 
 export const getTrendingProducts = async (limit = 8) => {
+  const CACHE_KEY = `recommendations:trending:${limit}`;
+  const cached = await cache.get(CACHE_KEY);
+  if (cached) return cached;
+
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 

@@ -26,10 +26,16 @@ model User {
   vendorProfile VendorProfile?
   oauthAccounts OAuthAccount[]
   sessions      Session[]
-  wishlistItems WishlistItem[]
+  wishlist      WishlistItem[]
   cart          Cart?
   verificationTokens VerificationToken[]
-  chatMessages ChatMessage[]
+  chatMessages  ChatMessage[]
+  qaQuestions   ProductQA[]
+  notifications Notification[]
+  groups        UserGroup[]
+  auditLogs     AuditLog[]
+  returns       ReturnRequest[]
+  orderNotes    OrderNote[]
 }
 
 enum UserRole {
@@ -108,6 +114,10 @@ model VendorProfile {
   vendorOrders  VendorOrder[]
   payouts       Payout[]
   chatMessages  ChatMessage[]
+  coupons       Coupon[]
+  pageVisits    PageVisit[]
+  planId        String?
+  plan          VendorPlan?   @relation(fields: [planId], references: [id])
 }
 
 enum VendorStatus {
@@ -161,6 +171,11 @@ model Product {
   orderItems    OrderItem[]
   wishlistItems WishlistItem[]
   cartItems     CartItem[]
+  flashSales    FlashSale[]
+  qaItems       ProductQA[]
+  stockEvents   StockEvent[]
+  pageVisits    PageVisit[]
+  featureValues ProductFeatureValue[]
 }
 
 enum ProductStatus {
@@ -191,6 +206,7 @@ model Category {
   seoDesc     String?
 
   productCategories ProductCategory[]
+  categoryFeatures  CategoryFeature[]
 }
 
 model ProductCategory {
@@ -222,6 +238,7 @@ model ProductVariant {
 
   orderItems OrderItem[]
   cartItems  CartItem[]
+  stockEvents StockEvent[]
 }
 
 model ProductOption {
@@ -300,6 +317,13 @@ model Order {
   shippingAddress   Address? @relation("ShippingAddress", fields: [shippingAddressId], references: [id])
   billingAddressId  String?
   billingAddress    Address? @relation("BillingAddress", fields: [billingAddressId], references: [id])
+  
+  shippingMethodId  String?
+  shippingMethod    ShippingMethod? @relation(fields: [shippingMethodId], references: [id])
+  taxBreakdown      Json?
+
+  returns         ReturnRequest[]
+  orderNotes      OrderNote[]
 }
 
 enum OrderStatus {
@@ -336,6 +360,7 @@ model VendorOrder {
 
   items           OrderItem[]
   createdAt       DateTime      @default(now())
+  shipments       Shipment[]
 }
 
 model OrderItem {
@@ -353,6 +378,7 @@ model OrderItem {
   price           Float
   quantity        Int
   total           Float
+  returnItems     ReturnItem[]
 }
 
 model Payment {
@@ -412,14 +438,29 @@ model CartItem {
 }
 
 model Review {
-  id        String   @id @default(cuid())
-  productId String
-  product   Product  @relation(fields: [productId], references: [id])
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  rating    Int
-  comment   String?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  rating     Int
+  comment    String?
+  isVerified Boolean  @default(false) // verified purchase
+  createdAt  DateTime @default(now())
+}
+
+model ProductQA {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  question   String
+  answer     String?
+  answeredBy String?  // userId of vendor/admin who answered
+  isPublic   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model WishlistItem {
@@ -463,6 +504,7 @@ enum TokenType {
 model AuditLog {
   id              String   @id @default(cuid())
   userId          String?
+  user            User?    @relation(fields: [userId], references: [id])
   action          String   // e.g. "PRODUCT_CREATE", "VENDOR_APPROVE"
   resource        String   // e.g. "Product", "VendorProfile"
   resourceId      String?
@@ -522,3 +564,211 @@ model FlashSale {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
+
+model Permission {
+  id          String      @id @default(cuid())
+  action      String      @unique // e.g., 'manage_categories', 'manage_users'
+  description String?
+  groups      UserGroup[]
+  createdAt   DateTime    @default(now())
+}
+
+model UserGroup {
+  id          String       @id @default(cuid())
+  name        String       @unique // e.g., 'Super Admin', 'Content Moderator'
+  description String?
+  permissions Permission[]
+  users       User[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model VendorPlan {
+  id             String          @id @default(cuid())
+  name           String          @unique // e.g., 'Basic', 'Pro'
+  price          Float           @default(0)
+  maxProducts    Int             @default(50)
+  commissionRate Float           @default(10.0) // override default if present
+  features       String[]        // e.g., ['analytics', 'priority_support']
+  vendors        VendorProfile[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+enum FeatureType {
+  TEXT
+  NUMBER
+  SELECT
+}
+
+model Feature {
+  id          String   @id @default(cuid())
+  name        String
+  type        FeatureType
+  options     String[]    // Array of predefined strings for SELECT type
+  isGlobal    Boolean     @default(false)
+  
+  categories  CategoryFeature[]
+  productValues ProductFeatureValue[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CategoryFeature {
+  categoryId  String
+  featureId   String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  feature     Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([categoryId, featureId])
+}
+
+model ProductFeatureValue {
+  id          String   @id @default(cuid())
+  productId   String
+  featureId   String
+  value       String   // Stringified value or just string
+  
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  feature     Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, featureId])
+}
+
+// ---------------------------------------------------------
+// PHASE 8: SHIPPING & TAX ENGINE
+// ---------------------------------------------------------
+
+model ShippingZone {
+  id        String   @id @default(cuid())
+  name      String   // "Domestic", "International"
+  countries String[] // ["US", "CA"]
+  states    String[] // ["CA", "NY"]
+  methods   ShippingMethod[]
+}
+
+model ShippingMethod {
+  id             String           @id @default(cuid())
+  zoneId         String
+  zone           ShippingZone     @relation(fields: [zoneId], references: [id])
+  name           String
+  type           ShippingRateType
+  flatRate       Float?
+  freeAbove      Float?
+  weightRates    Json?
+  carrier        String?
+  carrierService String?
+  isActive       Boolean          @default(true)
+  vendorId       String?          // null = marketplace-wide
+
+  orders         Order[]
+}
+
+enum ShippingRateType {
+  FLAT
+  WEIGHT_BASED
+  FREE
+  CARRIER_API
+}
+
+model TaxZone {
+  id        String    @id @default(cuid())
+  name      String    // "US Federal", "California Sales Tax"
+  rules     TaxRule[]
+}
+
+model TaxRule {
+  id                String  @id @default(cuid())
+  zoneId            String
+  zone              TaxZone @relation(fields: [zoneId], references: [id])
+  country           String
+  state             String?
+  zipCode           String?
+  rate              Float   // 8.25 = 8.25%
+  priority          Int     @default(0) // for compound taxes
+  isActive          Boolean @default(true)
+  appliesToShipping Boolean @default(false)
+}
+
+// ---------------------------------------------------------
+// PHASE 9: RETURNS, REFUNDS & ORDER MANAGEMENT
+// ---------------------------------------------------------
+
+model ReturnRequest {
+  id            String @id @default(cuid())
+  orderId       String
+  order         Order @relation(fields: [orderId], references: [id])
+  userId        String
+  user          User @relation(fields: [userId], references: [id])
+  vendorOrderId String?
+  status        ReturnStatus @default(REQUESTED)
+  reason        String
+  resolution    ReturnResolution? // REFUND, EXCHANGE, STORE_CREDIT
+  adminNotes    String?
+  items         ReturnItem[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ReturnItem {
+  id              String @id @default(cuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id])
+  orderItemId     String
+  orderItem       OrderItem @relation(fields: [orderItemId], references: [id])
+  quantity        Int
+  reason          String?
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  RECEIVED
+  REFUNDED
+  EXCHANGED
+  CLOSED
+}
+
+enum ReturnResolution {
+  REFUND
+  EXCHANGE
+  STORE_CREDIT
+}
+
+model Shipment {
+  id              String @id @default(cuid())
+  vendorOrderId   String
+  vendorOrder     VendorOrder @relation(fields: [vendorOrderId], references: [id])
+  carrier         String // "fedex", "ups", etc
+  trackingNumber  String
+  trackingUrl     String?
+  status          ShipmentStatus @default(LABEL_CREATED)
+  estimatedDelivery DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum ShipmentStatus {
+  LABEL_CREATED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  EXCEPTION
+}
+
+model OrderNote {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  content     String
+  isInternal  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+

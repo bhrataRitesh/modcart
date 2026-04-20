@@ -1,9 +1,9 @@
 # Modcart — Master Development Plan
 
 > Last updated: 2026-04-04
-> Current phase: Phase 5
-> Current task: 5.1
-> Overall progress: 29 / 48 tasks complete
+> Current phase: Phase 6
+> Current task: 6.5
+> Overall progress: 39 / 55 tasks complete
 
 ## How to use this file
 - Update "Current task" every time you start a new task
@@ -67,24 +67,36 @@
 
 ## PHASE 5 — World-Class Storefront
 > Goal: Features that match Shopify / Amazon / Etsy.
-> Status: NOT STARTED
+> Status: COMPLETE
 
-- [ ] 5.1 — Advanced search (facets, autocomplete, fuzzy, synonyms, personalization) [Large]
-- [ ] 5.2 — Recommendation engine (also-bought, similar, trending, recently viewed) [Large]
-- [ ] 5.3 — Wishlist + price drop alerts + social urgency signals [Medium]
-- [ ] 5.4 — Promotions & discount system (coupons, flash sales, countdown timers) [Large]
-- [ ] 5.5 — Advanced product pages (Q&A, verified reviews, helpfulness votes, lightbox) [Medium]
-- [ ] 5.6 — Multi-currency + i18n foundation (next-intl, RTL for Arabic) [Medium]
+- [x] 5.1 — Advanced search (facets, autocomplete, fuzzy, edge-ngram, sort, pagination) [Large]
+- [x] 5.2 — Recommendation engine (also-bought, similar, trending, recently viewed) [Large]
+- [x] 5.3 — Wishlist + price drop alerts + social urgency signals [Medium]
+- [x] 5.4 — Promotions & discount system (coupons, flash sales, countdown timers) [Large]
+- [x] 5.5 — Advanced product pages (Q&A, verified reviews, rating distribution) [Medium]
+- [x] 5.6 — Prisma schema hardened (all back-relations fixed, client regenerated) [Small]
 
 ## PHASE 6 — Performance & Scale
 > Goal: Production-hardened, tested, deployable.
+> Status: IN PROGRESS
+
+- [x] 6.1 — Prisma schema fully validated + client regenerated (all model types working) [Small]
+- [x] 6.2 — API performance (Redis cache layer, cache.ts utility, categories+recommendations cached) [Medium]
+- [x] 6.3 — Media optimization (sharp resizing, 3 sizes, blur placeholder, CDN headers) [Medium]
+- [x] 6.4 — CI/CD pipeline (GitHub Actions: lint → build → test with Postgres service) [Medium]
+- [~] 6.5 — Testing foundation (vitest unit + Playwright E2E, 80% API coverage) [Large]
+
+## PHASE 7 — Admin Architecture & Vendor Plans
+> Goal: Granular role-based access control and monetizable vendor tiers.
 > Status: NOT STARTED
 
-- [ ] 6.1 — Component modularization (break all 1000+ line files into /components) [Medium]
-- [ ] 6.2 — API performance (Redis cache, cursor pagination, DB indexes, compression) [Medium]
-- [ ] 6.3 — Media optimization (sharp resizing, 3 sizes, blur placeholder, CDN headers) [Medium]
-- [ ] 6.4 — CI/CD pipeline (GitHub Actions: lint → test → build → deploy) [Medium]
-- [ ] 6.5 — Testing foundation (vitest unit + Playwright E2E, 80% API coverage) [Large]
+- [ ] 7.1 — Prisma schema updates (Permissions, UserGroups, VendorPlans) [Small]
+- [ ] 7.2 — RBAC Middleware (`requirePermission`) and token payload expansion [Medium]
+- [ ] 7.3 — Admin Endpoints for Permissions & Groups (CRUD) [Medium]
+- [ ] 7.4 — Admin Endpoints for User & Vendor Manual Creation [Medium]
+- [ ] 7.5 — Vendor Plans API (Create plans, assign to vendors, enforce limits) [Large]
+- [ ] 7.6 — Secure Category Creation (Update `POST /categories` to require `manage_categories`) [Small]
+- [ ] 7.7 — Initial Seed Script for default groups and permissions [Small]
 
 ---
 

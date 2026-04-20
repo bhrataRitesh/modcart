@@ -43,6 +43,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     const user = await prisma.user.findUnique({
       where: { email: body.email },
+      include: {
+        groups: {
+          include: { permissions: true }
+        }
+      }
     });
 
     if (!user || !user.passwordHash) {
@@ -55,10 +60,16 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.code(401).send({ message: 'Invalid credentials' });
     }
 
+    // Flatten permissions from all user groups
+    const permissions = [...new Set(
+      user.groups.flatMap((g: any) => g.permissions.map((p: any) => p.action))
+    )];
+
     const token = fastify.jwt.sign({
       id: user.id,
       email: user.email,
       role: user.role,
+      permissions,
     });
 
     return { 
@@ -68,7 +79,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role
+        role: user.role,
+        permissions,
       }
     };
   });

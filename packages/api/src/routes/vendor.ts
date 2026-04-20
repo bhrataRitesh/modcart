@@ -1,7 +1,7 @@
 import { env } from '@modcart/config';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+const stripe = new Stripe(env.STRIPE_SECRET_KEY as string, {
   apiVersion: '2023-10-16' as any,
 });
 
@@ -254,10 +254,14 @@ export default async function vendorRoutes(fastify: FastifyInstance) {
       }
 
       const buffer = await data.toBuffer();
-      const fileName = `uploads/${Date.now()}-${data.filename}`;
-      const url = await fastify.storage.upload(fileName, buffer, data.mimetype);
-
-      return { url };
+      // Use uploadImage for automatic resizing + optimization
+      const baseName = `uploads/${Date.now()}-${data.filename.split('.')[0]}`;
+      const variantUrls = await fastify.storage.uploadImage(baseName, buffer);
+ 
+      return { 
+        url: variantUrls.medium, // Keep medium as primary URL for compatibility
+        variants: variantUrls 
+      };
     } catch (error) {
       request.log.error(error);
       return reply.status(500).send({ message: 'Upload failed' });

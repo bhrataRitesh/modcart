@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { prisma } from '@modcart/db';
 import { generateSlug } from '@modcart/core';
 import { validate } from '../middleware/validate';
+import { cache } from '../lib/cache';
 import { sendNotification } from '../services/notification.service';
 import { createProductSchema, updateProductSchema } from '../schemas/product.schema';
 import { requireRole, requireOwnership } from '../middleware/rbac';
@@ -12,15 +13,22 @@ type CreateProductBody = z.infer<typeof createProductSchema>;
 type UpdateProductBody = z.infer<typeof updateProductSchema>;
 
 export default async function productRoutes(fastify: FastifyInstance) {
-  // List all active products
+  // List all active products (cached 5 minutes)
   fastify.get('/', async () => {
-    return prisma.product.findMany({
+    const CACHE_KEY = 'products:all';
+    const cached = await cache.get(CACHE_KEY);
+    if (cached) return cached;
+
+    const products = await prisma.product.findMany({
       where: { status: 'ACTIVE' },
       include: { 
         vendor: true, 
         images: { take: 1 } 
       },
     });
+
+    await cache.set(CACHE_KEY, products, 300);
+    return products;
   });
 
   // Create product (Vendor only)
@@ -30,13 +38,20 @@ export default async function productRoutes(fastify: FastifyInstance) {
 
     const vendor = await prisma.vendorProfile.findUnique({
       where: { userId: user.id },
+      include: { plan: true, _count: { select: { products: true } } }
     });
 
     if (!vendor) {
       return reply.code(403).send({ message: 'Only vendors can create products' });
     }
 
+    if (vendor.plan && vendor._count.products >= vendor.plan.maxProducts) {
+      return reply.code(403).send({ message: `Plan limit reached. Your current plan allows up to ${vendor.plan.maxProducts} products.` });
+    }
+
     const slug = body.slug || generateSlug(body.name);
+    // Products start as DRAFT so they can be approved by admin (moderation queue)
+    const status = body.status || 'DRAFT';
 
     const product = await prisma.product.create({
       data: {
@@ -46,7 +61,7 @@ export default async function productRoutes(fastify: FastifyInstance) {
         price: body.price,
         stockQty: body.stockQty,
         vendorId: vendor.id,
-        status: body.status || 'ACTIVE',
+        status: status,
         categories: body.categoryIds ? {
           create: body.categoryIds.map((id: string) => ({
             categoryId: id,
@@ -100,7 +115,8 @@ export default async function productRoutes(fastify: FastifyInstance) {
         isVerified: true
       }).catch((err: Error) => fastify.log.error(err, 'Indexing failed'));
     });
-
+ 
+    await cache.del('products:all');
     return product;
   });
 
@@ -169,7 +185,8 @@ export default async function productRoutes(fastify: FastifyInstance) {
         }
       });
     }
-
+ 
+    await cache.del('products:all');
     return updated;
   });
 

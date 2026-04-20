@@ -23,6 +23,8 @@ import notificationRoutes from './routes/notifications';
 import recommendationRoutes from './routes/recommendations';
 import wishlistRoutes from './routes/wishlist';
 import promotionRoutes from './routes/promotions';
+import qaRoutes from './routes/qa';
+import shippingRoutes from './routes/shipping';
 import { initIndex } from '@modcart/search';
 import storagePlugin from './plugins/storage';
 
@@ -87,6 +89,8 @@ const start = async () => {
     await server.register(recommendationRoutes, { prefix: '/api/v1/recommendations' });
     await server.register(wishlistRoutes, { prefix: '/api/v1/wishlist' });
     await server.register(promotionRoutes, { prefix: '/api/v1/promotions' });
+    await server.register(qaRoutes, { prefix: '/api/v1/qa' });
+    await server.register(shippingRoutes, { prefix: '/api/v1/shipping' });
 
     // Initialize Search Index
     initIndex().catch((err: Error) => server.log.error(err, 'Search index initialization failed'));
